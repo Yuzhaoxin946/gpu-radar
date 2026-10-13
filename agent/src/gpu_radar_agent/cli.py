@@ -15,6 +15,7 @@ import threading
 import time
 
 from .api import APIError, Client
+from . import background
 from .collector import collect_bounded, simulated_report
 from .config import default_config_path, load_config, normalize_server, write_config
 from .server_clock import ServerClock
@@ -134,6 +135,9 @@ def run(args) -> int:
         previous[signum] = signal.signal(signum, lambda *_: stop.set())
     try:
         with run_lock(Path(args.config)):
+            if getattr(args, "background_managed", False):
+                with background.managed_worker(args.config, stop):
+                    return run_loop(args, config, stop)
             return run_loop(args, config, stop)
     finally:
         for signum, handler in previous.items():
@@ -180,6 +184,7 @@ def parser() -> argparse.ArgumentParser:
     for name, function, help_text in (
         ("login", login, "Sign in with an App account and enroll this server"),
         ("run", run, "Collect and report continuously"),
+        ("background", background.command, "Start, inspect or stop a detached worker without systemd"),
         ("status", status, "Inspect local binding without revealing the device credential"),
         ("collect", collect_command, "Print one real GPU sample as JSON; no account or network required"),
         ("logout", logout, "Remove local credentials; unbind in Mac app to revoke remotely"),
@@ -197,6 +202,8 @@ def parser() -> argparse.ArgumentParser:
     commands["run"].add_argument("--collection-timeout", type=float, default=8, help="Maximum collection worker seconds")
     commands["run"].add_argument("--request-timeout", type=float, default=10, help="Maximum API request seconds")
     commands["run"].add_argument("--simulate", action="store_true", help="EXPLICIT DEMO: send labeled synthetic GPU samples")
+    commands["run"].add_argument("--background-managed", action="store_true", help=argparse.SUPPRESS)
+    commands["background"].add_argument("background_action", choices=("start", "status", "stop"))
     commands["run"].add_argument("--once", action="store_true", help="Send one sample and exit (smoke test)")
     commands["collect"].add_argument("--collection-timeout", type=float, default=8, help="Maximum collection worker seconds")
     return root

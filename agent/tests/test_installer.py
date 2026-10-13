@@ -1,7 +1,7 @@
 """Installer acceptance tests: real files/hash checks, mocked network and service manager."""
 
 import ast
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -43,7 +43,10 @@ class InstallerTests(unittest.TestCase):
         # macOS /var is a symlink. The installer correctly disallows symlink homes.
         self.home = Path(directory).resolve() / "home"
         self.home.mkdir(mode=0o700)
+        self.system_unit_dir = self.home.parent / "systemd/system"
+        self.system_unit_dir.mkdir(mode=0o755, parents=True)
         self.active_by_host = {}
+        self.processes_by_host = {}
         self.enabled_services = set()
         self.select_host("1" * 32)
         self.artifact = b"verified GPU Radar test artifact\n"
@@ -55,7 +58,11 @@ class InstallerTests(unittest.TestCase):
         self.allow_linger = True
         self.allow_sudo_linger = False
         self.bus_available = True
+        self.system_bus_available = True
         self.restart_failure = False
+        self.process_start_failure = False
+        self.process_stop_failure = False
+        self.process_status_code = None
         self.report_code = 0
         self.collect_code = 0
         self.login_count = 0
@@ -66,8 +73,33 @@ class InstallerTests(unittest.TestCase):
         self.stderr = io.StringIO()
         self.stack.enter_context(patch.dict(os.environ, {"HOME": str(self.home)}))
         # These OS facts are tested separately. Everything below uses real private files.
+        # Keep the default cases ordinary-user cases even when CI runs as Linux root.
+        self.stack.enter_context(patch.object(self.installer.os, "geteuid", return_value=1001))
+        original_lstat = Path.lstat
+
+        def account_owned_lstat(path, *args, **kwargs):
+            metadata = original_lstat(path, *args, **kwargs)
+            if path == self.home or self.home in path.parents:
+                metadata = list(metadata)
+                metadata[4] = 1001
+                return os.stat_result(metadata)
+            return metadata
+
+        self.stack.enter_context(patch.object(Path, "lstat", new=account_owned_lstat))
         self.stack.enter_context(patch.object(self.installer, "check_platform"))
         self.stack.enter_context(patch.object(self.installer, "read_machine_id", side_effect=lambda: self.machine_id))
+        self.stack.enter_context(patch.object(self.installer, "system_unit_directory", return_value=self.system_unit_dir))
+        real_safe_directory = self.installer.safe_directory
+
+        def check_fixture_directory(home, path):
+            # A system directory fixture lives under the runner's temporary root,
+            # not real /etc. Validate its private fixture ancestor and descendants,
+            # without requiring /tmp itself to be non-world-writable on Linux.
+            if home == Path("/") and path == self.system_unit_dir:
+                home = self.system_unit_dir.parent
+            return real_safe_directory(home, path)
+
+        self.stack.enter_context(patch.object(self.installer, "safe_directory", side_effect=check_fixture_directory))
         self.stack.enter_context(patch.object(self.installer.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="linux-user", pw_dir=str(self.home))))
         self.stack.enter_context(patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name == "sudo" else "/usr/bin/" + name))
         self.stack.enter_context(patch.object(self.installer, "build_opener", side_effect=self.build_opener))
@@ -83,6 +115,30 @@ class InstallerTests(unittest.TestCase):
         self.package = self.home / ".local/share/gpu-radar/hosts" / machine_id / "gpu-radar-agent.pyz"
         self.config = self.home / ".config/gpu-radar/hosts" / machine_id / "agent.json"
         self.unit = self.home / ".config/systemd/user" / self.service
+        self.system_unit = self.system_unit_dir / self.service
+
+    @property
+    def process_active(self):
+        return self.processes_by_host.get(self.machine_id, False)
+
+    @process_active.setter
+    def process_active(self, value):
+        self.processes_by_host[self.machine_id] = value
+
+    @contextmanager
+    def root_account(self):
+        account = SimpleNamespace(pw_name="root", pw_dir=str(self.home), pw_uid=0)
+        original_lstat = Path.lstat
+
+        def root_owned_lstat(path, *args, **kwargs):
+            metadata = list(original_lstat(path, *args, **kwargs))
+            metadata[4] = 0
+            return os.stat_result(metadata)
+
+        with patch.object(self.installer.os, "geteuid", return_value=0), \
+                patch.object(self.installer.pwd, "getpwuid", return_value=account), \
+                patch.object(Path, "lstat", new=root_owned_lstat):
+            yield
 
     @property
     def active(self):
@@ -143,14 +199,37 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn("--once", args)
                 self.assertEqual(Path(args[args.index("--config") + 1]), self.config)
                 code = self.report_code
+            elif action == "background":
+                self.assertEqual(Path(args[args.index("--config") + 1]), self.config)
+                background_action = args[3]
+                if background_action == "status":
+                    code = self.process_status_code
+                    if code is None:
+                        code = 0 if self.process_active else 3
+                elif background_action == "start":
+                    if self.process_start_failure:
+                        self.process_start_failure = False
+                        code = 1
+                    else:
+                        self.process_active = True
+                elif background_action == "stop":
+                    if self.process_stop_failure:
+                        self.process_stop_failure = False
+                        code = 1
+                    else:
+                        self.process_active = False
+                else:
+                    self.fail("Unexpected background command: " + str(args))
             else:
                 self.fail("Unexpected Python action: " + str(args))
         elif args[0] == "systemctl":
+            self.assertIn(args[1], {"--user", "--system"})
             action = args[2]
             if action not in {"show-environment", "daemon-reload"}:
                 self.assertEqual(args[-1], self.service, "Never operate another host's unit in a shared HOME")
             if action == "show-environment":
-                code = 0 if self.bus_available else 1
+                available = self.bus_available if args[1] == "--user" else self.system_bus_available
+                code = 0 if available else 1
             elif action == "is-active":
                 code = 0 if self.active else 3
             elif action == "is-enabled":
@@ -161,7 +240,8 @@ class InstallerTests(unittest.TestCase):
                 self.enabled = True
             elif action == "disable":
                 # Disabling a missing unit can fail and leave an enabled link behind.
-                if self.unit.exists():
+                unit = self.unit if args[1] == "--user" else self.system_unit
+                if unit.exists():
                     self.enabled = False
                 else:
                     code = 1
@@ -295,7 +375,7 @@ class InstallerTests(unittest.TestCase):
     def test_linger_denial_does_not_enroll_or_claim_reboot_success(self):
         self.linger = self.allow_linger = False
         with self.assertRaisesRegex(self.installer.InstallError, "Reboot startup was NOT enabled"):
-            self.installer.main(["--username", "alice", "--name", "lab-a"])
+            self.installer.main(["--username", "alice", "--name", "lab-a", "--background", "systemd"])
         self.assertEqual(self.login_count, 0)
         self.assertFalse(self.config.exists())
         self.assertFalse(self.package.exists())
@@ -305,7 +385,7 @@ class InstallerTests(unittest.TestCase):
     def test_missing_user_manager_fails_before_account_enrollment(self):
         self.bus_available = False
         with self.assertRaisesRegex(self.installer.InstallError, "user manager is unavailable"):
-            self.installer.main(["--username", "alice", "--name", "lab-a"])
+            self.installer.main(["--username", "alice", "--name", "lab-a", "--background", "systemd"])
         self.assertEqual(self.login_count, 0)
         self.assertFalse(self.config.exists())
         self.assertFalse(self.unit.exists())
@@ -357,41 +437,60 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.package.exists() and self.config.exists() and self.unit.exists())
         self.assertTrue(self.active and self.enabled)
 
-    def test_root_install_uses_root_home_and_root_user_manager(self):
-        self.linger = False
+    def test_root_install_uses_root_home_and_system_manager_without_loginctl(self):
+        self.linger = self.allow_linger = False
+        self.bus_available = False
         inherited_home = self.home.parent / "sudo-callers-home"
         inherited_home.mkdir(mode=0o700)
-        root_account = SimpleNamespace(pw_name="root", pw_dir=str(self.home), pw_uid=0)
-        original_lstat = Path.lstat
-
-        def root_owned_lstat(path, *args, **kwargs):
-            # Simulate files created by effective root while retaining actual file types,
-            # links and permission checks. The test runner itself remains unprivileged.
-            metadata = list(original_lstat(path, *args, **kwargs))
-            metadata[4] = 0
-            return os.stat_result(metadata)
-
         inherited_environment = {
             "HOME": str(inherited_home), "SUDO_USER": "researcher",
             "XDG_RUNTIME_DIR": "/run/user/1001", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus",
         }
         with patch.dict(os.environ, inherited_environment), \
-                patch.object(self.installer.os, "geteuid", return_value=0), \
-                patch.object(self.installer.pwd, "getpwuid", return_value=root_account), \
-                patch.object(Path, "lstat", new=root_owned_lstat):
+                self.root_account(), \
+                patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name == "loginctl" else "/usr/bin/" + name):
             self.assertEqual(self.installer.main(["--username", "alice", "--name", "root-gpu"]), 0)
             self.assertEqual(os.environ["HOME"], str(self.home))
-            self.assertEqual(os.environ["XDG_RUNTIME_DIR"], "/run/user/0")
-            self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/0/bus")
 
         self.assertEqual(list(inherited_home.iterdir()), [])
         self.assertEqual(self.login_count, 1)
-        self.assertTrue(self.active and self.enabled and self.linger)
+        self.assertTrue(self.active and self.enabled)
         self.assertEqual(self.package.read_bytes(), self.artifact)
-        self.assertIn(["loginctl", "show-user", "root", "--property=Linger", "--value"], self.commands)
-        self.assertIn(["loginctl", "--no-ask-password", "enable-linger", "root"], self.commands)
+        self.assertIn(["systemctl", "--system", "enable", self.service], self.commands)
+        self.assertTrue(all(args[0] not in {"sudo", "loginctl"} for args in self.commands))
+        self.assertFalse(self.unit.exists())
+        unit = self.system_unit.read_text()
+        self.assertIn("WantedBy=multi-user.target", unit)
+        self.assertIn(str(self.package), unit)
+        self.assertIn(str(self.config), unit)
+        self.assertIn("ConditionHost=" + self.machine_id, unit)
+
+    def test_existing_root_user_service_is_preserved_instead_of_migrated(self):
+        self.old_installation()
+        binding = self.config.read_bytes()
+        self.linger = False
+        with self.root_account():
+            self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+            self.assertEqual(os.environ["XDG_RUNTIME_DIR"], "/run/user/0")
+            self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/0/bus")
+        self.assertEqual(self.config.read_bytes(), binding)
+        self.assertEqual(self.login_count, 0)
+        self.assertTrue(self.active and self.enabled and self.linger)
+        self.assertFalse(self.system_unit.exists())
         self.assertIn(["systemctl", "--user", "enable", self.service], self.commands)
-        self.assertTrue(all(args[0] != "sudo" for args in self.commands))
+        self.assertTrue(all(args[:2] != ["systemctl", "--system"] for args in self.commands))
+
+    def test_root_system_service_upgrade_failure_restores_old_service(self):
+        with self.root_account():
+            self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+            before = {path: path.read_bytes() for path in (self.package, self.config, self.system_unit)}
+            self.restart_failure = True
+            with self.assertRaisesRegex(self.installer.InstallError, "Command failed"):
+                self.installer.main(["--username", "alice"])
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertTrue(self.active and self.enabled)
+        self.assertIn(["systemctl", "--system", "start", self.service], self.commands)
+        self.assertEqual(self.login_count, 1)
 
     def test_root_linger_failure_never_retries_with_sudo(self):
         self.linger = self.allow_linger = False
@@ -418,11 +517,170 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(missing=missing), \
                     patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name == missing else "/usr/bin/" + name):
                 with self.assertRaisesRegex(self.installer.InstallError, missing + " is required"):
-                    self.installer.main(["--username", "alice"])
+                    self.installer.main(["--username", "alice", "--background", "systemd"])
                 self.assertEqual(self.login_count, 0)
                 self.assertFalse(self.config.exists())
                 self.assertFalse(self.package.exists())
                 self.assertFalse(self.unit.exists())
+
+    def test_auto_without_systemd_installs_background_process_and_reuses_binding(self):
+        args = ["--username", "alice", "--name", "container-gpu"]
+        with patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name in {"systemctl", "loginctl"} else "/usr/bin/" + name):
+            self.assertEqual(self.installer.main(args), 0)
+            binding = self.config.read_bytes()
+            self.assertTrue(self.process_active)
+            self.assertFalse(self.active or self.enabled)
+            self.assertFalse(self.unit.exists() or self.system_unit.exists())
+            self.assertEqual(self.package.read_bytes(), self.artifact)
+            self.assertEqual((self.package.parent / "background-mode").read_text().strip(), "process")
+            self.assertEqual(self.login_count, 1)
+            self.assertNotIn("starts after reboot", self.stdout.getvalue())
+            self.assertEqual(self.installer.main(args), 0)
+        self.assertEqual(self.config.read_bytes(), binding)
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(self.process_active)
+        actions = [args[3] for args in self.commands if len(args) > 3 and args[2] == "background"]
+        self.assertIn("stop", actions, "An upgrade must not leave the old reporter running")
+        self.assertEqual(actions.count("start"), 2)
+        self.assertTrue(all(args[0] not in {"systemctl", "loginctl", "sudo"} for args in self.commands))
+
+    def test_auto_linger_failure_falls_back_to_process_without_claiming_reboot(self):
+        self.linger = self.allow_linger = False
+        self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+        self.assertTrue(self.process_active)
+        self.assertFalse(self.active or self.enabled)
+        self.assertFalse(self.unit.exists())
+        self.assertNotIn("starts after reboot", self.stdout.getvalue())
+
+    def test_auto_without_user_bus_falls_back_to_process(self):
+        self.bus_available = False
+        self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+        self.assertTrue(self.process_active)
+        self.assertFalse(self.unit.exists())
+        self.assertEqual(self.login_count, 1)
+
+    def test_root_container_without_system_bus_uses_process(self):
+        self.system_bus_available = self.bus_available = False
+        self.linger = self.allow_linger = False
+        with self.root_account():
+            self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+        self.assertTrue(self.process_active)
+        self.assertFalse(self.unit.exists() or self.system_unit.exists())
+        self.assertTrue(all(args[0] not in {"loginctl", "sudo"} for args in self.commands))
+        self.assertEqual(self.login_count, 1)
+        self.assertNotIn("starts after reboot", self.stdout.getvalue())
+
+    def test_explicit_process_skips_all_systemd_setup(self):
+        self.assertEqual(self.installer.main(["--username", "alice", "--background", "process"]), 0)
+        self.assertTrue(self.process_active)
+        self.assertTrue(all(args[0] not in {"systemctl", "loginctl", "sudo"} for args in self.commands))
+        self.assertFalse(self.unit.exists() or self.system_unit.exists())
+
+    def test_process_mode_is_retained_when_systemd_becomes_available(self):
+        self.assertEqual(self.installer.main(["--username", "alice", "--background", "process"]), 0)
+        binding = self.config.read_bytes()
+        self.commands.clear()
+        self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+        self.assertTrue(self.process_active)
+        self.assertEqual(self.config.read_bytes(), binding)
+        self.assertEqual(self.login_count, 1)
+        self.assertFalse(self.unit.exists())
+        self.assertTrue(all(args[0] not in {"systemctl", "loginctl", "sudo"} for args in self.commands))
+
+    def test_existing_user_unit_never_silently_falls_back_to_process(self):
+        before = self.old_installation()
+        self.bus_available = False
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(["--username", "alice"])
+        self.assert_preserved(before)
+        self.assertFalse(self.process_active)
+        self.assertTrue(all(len(args) <= 2 or args[2] != "background" for args in self.commands))
+
+    def test_explicit_process_refuses_to_duplicate_existing_user_service(self):
+        before = self.old_installation()
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(["--username", "alice", "--background", "process"])
+        self.assert_preserved(before)
+        self.assertFalse(self.process_active)
+
+    def test_process_first_report_failure_keeps_binding_for_retry(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.report_code = 1
+        with self.assertRaisesRegex(self.installer.InstallError, "First real report failed"):
+            self.installer.main(args)
+        self.assertEqual(self.login_count, 1)
+        binding = self.config.read_bytes()
+        self.assertFalse(self.process_active)
+        self.assertFalse(self.package.exists())
+        self.assertFalse((self.package.parent / "background-mode").exists())
+        self.report_code = 0
+        self.assertEqual(self.installer.main(args), 0)
+        self.assertEqual(self.config.read_bytes(), binding)
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(self.process_active)
+
+    def test_process_upgrade_start_failure_rolls_back_artifact_and_restarts_old_process(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.assertEqual(self.installer.main(args), 0)
+        self.package.write_bytes(b"previous working artifact")
+        before = {path: path.read_bytes() for path in (self.package, self.config, self.package.parent / "background-mode")}
+        self.commands.clear()
+        self.process_start_failure = True
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(args)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(self.process_active)
+        actions = [args[3] for args in self.commands if len(args) > 3 and args[2] == "background"]
+        self.assertGreaterEqual(actions.count("stop"), 1)
+        self.assertEqual(actions.count("start"), 2, "Failed new start must be followed by restarting the old reporter")
+
+    def test_process_upgrade_report_failure_restores_old_running_process(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.assertEqual(self.installer.main(args), 0)
+        before = {path: path.read_bytes() for path in (self.package, self.config)}
+        self.report_code = 1
+        with self.assertRaisesRegex(self.installer.InstallError, "First real report failed"):
+            self.installer.main(args)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertTrue(self.process_active)
+        self.assertEqual(self.login_count, 1)
+
+    def test_process_status_error_preserves_existing_reporter_and_artifact(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.assertEqual(self.installer.main(args), 0)
+        before = {path: path.read_bytes() for path in (self.package, self.config)}
+        self.commands.clear()
+        self.process_status_code = 2
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(args)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertTrue(self.process_active)
+        self.assertTrue(all(len(args) < 4 or args[2:4] not in (["background", "start"], ["background", "stop"]) for args in self.commands))
+
+    def test_process_stop_failure_preserves_existing_reporter_and_files(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.assertEqual(self.installer.main(args), 0)
+        before = {path: path.read_bytes() for path in (self.package, self.config)}
+        self.commands.clear()
+        self.process_stop_failure = True
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(args)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertTrue(self.process_active)
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(all(len(args) < 4 or args[2:4] != ["background", "start"] for args in self.commands))
+
+    def test_fresh_process_start_failure_removes_artifact_but_keeps_binding(self):
+        args = ["--username", "alice", "--background", "process"]
+        self.process_start_failure = True
+        with self.assertRaises(self.installer.InstallError):
+            self.installer.main(args)
+        self.assertFalse(self.process_active)
+        self.assertFalse(self.package.exists())
+        self.assertFalse((self.package.parent / "background-mode").exists())
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(self.config.exists())
 
     def test_second_installer_is_rejected_without_enrollment(self):
         lock = self.package.parent / ".install.lock"

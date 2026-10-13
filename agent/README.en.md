@@ -7,11 +7,11 @@ Run one Agent on each GPU server to monitor multiple servers from the Mac app. S
 ## Before you install
 
 - A Linux GPU server with a working NVIDIA driver. The current SSH user must be able to run `nvidia-smi` and see the GPUs.
-- `bash`, `curl`, **Python 3.6+**, and a working systemd user manager. The installer uses a standalone `.pyz`; it needs no pip packages and does not change system Python.
+- `bash`, `curl`, and **Python 3.6+**. The installer uses a standalone `.pyz`; it needs no pip packages and does not change system Python.
 - An account registered in the latest macOS app using an invitation obtained privately from the service operator. Invitations are only used when creating new accounts; existing account login and Agent installation do not need one or consume a use. Your app account is separate from your Linux/SSH account. Other users' training contributes to GPU metrics without requiring those users to register app accounts.
 - Outbound HTTPS access to `https://123.56.135.166` and GitHub Release downloads. Use the Aliyun mirror below if GitHub is unreachable. **No new inbound port is needed on the GPU server.**
 
-Open an interactive terminal as the Linux user who will own the installation; both regular users and root are supported. Do not put your app password in a command. Remote command execution through a gateway such as JumpServer may lack `/dev/tty`; log in to the target server's terminal normally before pasting the command. For direct SSH, `ssh -t your-gpu-host` requests a terminal. The installer still cannot configure automatic background operation in containers or servers without a working systemd user manager.
+Open an interactive terminal as the Linux user who will own the installation; both regular users and root are supported. Do not put your app password in a command. Remote command execution through a gateway such as JumpServer may lack `/dev/tty`; log in to the target server's terminal normally before pasting the command. For direct SSH, `ssh -t your-gpu-host` requests a terminal. Docker and other environments without systemd are supported through a detached background process.
 
 ## One-command installation
 
@@ -21,7 +21,7 @@ Replace `your_account` with your **app account username**:
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account
 ```
 
-Enter your app password when prompted. The installer uses the current cloud service without asking for an IP or port. It verifies the download, collects real GPU data, validates the first report, and enables the background service. The display name defaults to the short hostname; you can choose one explicitly:
+Enter your app password when prompted. The installer uses the current cloud service without asking for an IP or port. It verifies the download, collects real GPU data, validates the first report, and starts background collection. The display name defaults to the short hostname; you can choose one explicitly:
 
 ```bash
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account --name lab-a
@@ -37,13 +37,23 @@ Both download methods connect to `https://123.56.135.166` and use the same app a
 
 The installation directory belongs to **the Linux account actually running the installer**. The installer resolves that account's home by effective UID, ignoring `SUDO_USER` and any inherited `HOME` from another account. A regular user installs in their own home; running as root directly or through `sudo bash` normally installs under `/root`. If using sudo, put it on the right side of the pipeline (`curl … | sudo bash -s -- …`); applying sudo only to `curl` does not change the installation user. `curl … | sudo -u other bash -s -- …` installs in `other`'s home. `--username` always names the app account and does not select the Linux installation user.
 
-Both regular users and root use a `systemctl --user` service. The installer checks and attempts to enable **linger** for that Linux user, keeping the service running after SSH logout and starting it at boot. Root enables linger directly, without another sudo command. For regular users, if server policy requires administrator privileges, the installer asks whether to try `sudo`. Any sudo password prompt requires your **Linux user's password**, not your app password. If you lack permission, ask an administrator to run:
+### Background modes and restart behavior
 
-```bash
-sudo loginctl enable-linger your_linux_username
-```
+On first installation, the default `--background auto` chooses a mode for the environment:
 
-Replace `your_linux_username` with the Linux account actually running the installer, log in again as that user, and rerun the installer. Background installation and the first report are confirmed only when it reports `service active and enabled; Linger=yes` and `First report accepted`.
+| Environment | Background mode | After SSH logout | After server / container restart |
+| --- | --- | --- | --- |
+| Regular user with working user-level systemd and linger | User-level systemd | Keeps running | Startup at boot is configured |
+| New root installation with working system-level systemd | System-level systemd; no root linger needed | Keeps running | Startup at boot is configured |
+| Docker or another environment without working systemd | Detached process | Keeps running | Requires manual startup or container startup integration |
+
+Reinstallation preserves the existing background mode and device binding. Existing user services retain their scope, including older root installations; they are not automatically migrated to system services. On first installation, append `--background process` to select a detached process explicitly, or `--background systemd` to require systemd and stop if it cannot be configured. An explicit option that conflicts with the installed mode also stops installation. To change modes, follow the matching stop and removal steps below, then reinstall; do not delete the mode record or lock files directly.
+
+User-level systemd checks and attempts to enable **linger** for the installation user. If administrator privileges are required for a regular user, the installer asks whether to try `sudo`; that prompt requires the **Linux user's password**, not the app password. An administrator can also run `sudo loginctl enable-linger your_linux_username`. On first installation, `auto` falls back to a detached process if this cannot be configured. Forced `systemd` mode or an existing systemd installation reports an error instead of silently changing modes.
+
+The installation result identifies the selected mode and verifies `First report accepted`. Systemd modes also confirm active/enabled service status, with linger checked for user services. Detached process mode explicitly reports **NOT configured for restart**: collection is running in the background, but restart recovery has not been configured.
+
+In Docker, exiting SSH does not stop the detached collector, but stopping or restarting the container terminates its processes. Use `background start` below after restarting, or integrate collection into the container entrypoint / existing process manager. Preserve the client and configuration files, and ensure the container has a valid, stable `/etc/machine-id` that differs from other monitored machines. Do not copy one device credential into multiple containers.
 
 Open the Mac app and sign in to the same app account to see the server. A new device needs a full five minutes of continuous samples before its status colors appear.
 
@@ -59,13 +69,11 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 `--check` verifies the client download, real GPU collection, and backend HTTPS. **It does not verify systemd/linger readiness for background operation.** To detect a failed download on the left side of a shell pipeline in automation, first run `set -o pipefail` in Bash. First enrollment still requires an interactive terminal; the installer has no command-line password option.
 
-## Inspect and manage the background service
+## Inspect and manage background collection
 
-The following commands apply to the one-command installer. Run them in that same Linux user's login shell on the target GPU server, with `HOME` pointing to that account's home. For example, after installing as root through `sudo bash`, use `sudo -i` to enter root's login environment. Set these variables in each new terminal:
+These commands apply to the one-command installer. Run them in the same Linux user's login shell on the target GPU server, with `HOME` pointing to that account's home. For example, after installing as root through `sudo bash`, use `sudo -i`. Set these variables in each new terminal:
 
 ```bash
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 machine_id="$(cat /etc/machine-id)"
 unit="gpu-radar-agent-${machine_id}.service"
 agent_dir="$HOME/.local/share/gpu-radar/hosts/$machine_id"
@@ -74,59 +82,106 @@ agent_file="$agent_dir/gpu-radar-agent.pyz"
 agent_config="$config_dir/agent.json"
 ```
 
-Inspect the process, boot startup, linger, recent logs, and local binding:
+Run `python3 "$agent_file" status --config "$agent_config"` to inspect the local binding without revealing the device credential. Confirm ongoing reports using the Mac app's last update time. Choose the section matching the installation result; do not start two background modes at once.
+
+### Docker / detached process
 
 ```bash
+python3 "$agent_file" background status --config "$agent_config"
+tail -n 50 "$agent_config.background.log"
+```
+
+| Action | Command |
+| --- | --- |
+| Start, including after restarting the container | `python3 "$agent_file" background start --config "$agent_config"` |
+| Stop | `python3 "$agent_file" background stop --config "$agent_config"` |
+| Check the process | `python3 "$agent_file" background status --config "$agent_config"` |
+
+To restart collection, run `stop`, confirm success, then run `start`. Repeated `start` calls do not launch a second collector. `stop` waits up to 25 seconds. The `status` exit codes are 0 for running, 3 for not running, and 1 for identity validation or other errors. This mode does not configure recovery after a server or container restart; a process that exits also needs to be started again. Follow logs with `tail -f "$agent_config.background.log"`; Ctrl+C exits only the log viewer. Logs rotate at 1 MiB, keeping one `.log.1` backup. A container startup script can invoke `background start` using the same absolute file paths; the container still needs its existing main process to stay running. Alternatively, have an existing container process manager supervise `python3 "$agent_file" run --config "$agent_config"`.
+
+Host policies that kill all session processes on logout (for example, `KillUserProcesses=yes`) can also terminate detached workers. Use a system service or an administrator-provided process manager on those hosts.
+
+### User-level systemd (including existing root user services)
+
+```bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 systemctl --user status "$unit" --no-pager
 systemctl --user is-enabled "$unit"
 loginctl show-user "$(id -un)" -p Linger
 journalctl --user -u "$unit" -n 50 --no-pager
-python3 "$agent_file" status --config "$agent_config"
 ```
 
-The `status` subcommand does not reveal the device credential, but checks only the local binding. Confirm continuing reports using the last update time in the Mac app. Follow logs with `journalctl --user -u "$unit" -f`; pressing Ctrl+C exits the log viewer without stopping collection.
+### Root system-level systemd
 
-| Action | Command | Effect |
+Use this only when the root installation result identifies a system-level service:
+
+```bash
+systemctl --system status "$unit" --no-pager
+systemctl --system is-enabled "$unit"
+journalctl --system -u "$unit" -n 50 --no-pager
+```
+
+The systemd operations are the same, with `--user` for user services and `--system` for system services:
+
+| Action | User-level command | System-level command |
 | --- | --- | --- |
-| Restart | `systemctl --user restart "$unit"` | Restarts collection, preserving the account binding and boot startup |
-| Stop temporarily | `systemctl --user stop "$unit"` | Stops now; the service may still start at the next boot |
-| Start again | `systemctl --user start "$unit"` | Resumes the installed collection service |
-| Stop and disable boot startup | `systemctl --user disable --now "$unit"` | Stops immediately and disables startup at boot |
-| Restore background operation and boot startup | `systemctl --user enable --now "$unit"` | Starts the service and enables it at boot |
+| Restart collection | `systemctl --user restart "$unit"` | `systemctl --system restart "$unit"` |
+| Stop, preserving boot startup | `systemctl --user stop "$unit"` | `systemctl --system stop "$unit"` |
+| Start again | `systemctl --user start "$unit"` | `systemctl --system start "$unit"` |
+| Stop and disable boot startup | `systemctl --user disable --now "$unit"` | `systemctl --system disable --now "$unit"` |
+| Start and enable boot startup | `systemctl --user enable --now "$unit"` | `systemctl --system enable --now "$unit"` |
+
+Replace `-n 50 --no-pager` with `-f` in the journal command to follow logs. Ctrl+C does not stop collection.
 
 ### Update or retry installation
 
-Rerun the original installation command. The installer preserves this machine's existing device binding instead of creating a duplicate. No app password needs to be stored on the server. If an explicitly supplied account or name conflicts with the saved binding, installation stops; use the original account/name when retrying, or omit `--name`.
+Rerun the original installation command. The installer preserves this machine's existing device binding and background mode instead of creating a duplicate. No app password needs to be stored on the server. If an explicitly supplied account or name conflicts with the saved binding, installation stops; use the original account/name when retrying, or omit `--name`.
 
 Download or preflight failures do not stop an existing service. If activation fails, the installer attempts to restore the previous program and service. A newly enrolled configuration is kept for a retry. Changing your app password does not automatically revoke previously enrolled devices.
 
 ### Uninstall and remove the device
 
-First set the variables at the start of this section, then follow these steps in order:
+Set the variables at the start of this section, then follow these steps in order:
 
-1. Stop this machine's service and disable boot startup:
+1. Stop collection using the installed background mode, disabling boot startup for systemd:
+
+   | Mode | Stop command | Status check |
+   | --- | --- | --- |
+   | Detached process | `python3 "$agent_file" background stop --config "$agent_config"` | `python3 "$agent_file" background status --config "$agent_config"` |
+   | User-level systemd | `systemctl --user disable --now "$unit"` | `systemctl --user is-active "$unit"` |
+   | System-level systemd | `systemctl --system disable --now "$unit"` | `systemctl --system is-active "$unit"` |
+
+   Confirm collection has stopped before continuing. Systemd's `is-active` returning `inactive` with a nonzero exit status is expected. If you integrated collection into a container startup script or another process manager, remove that startup configuration too.
+
+2. Delete this server in the Mac app to revoke its server-side device credential and remove its dashboard record. Stopping collection or running `logout` alone does not revoke the server-side credential.
+
+3. For systemd, remove the matching unit file and reload. Run only the pair matching your installation; skip this step for a detached process:
 
    ```bash
-   systemctl --user disable --now "$unit"
-   systemctl --user is-active "$unit"
+   # User-level (including existing root user services)
+   rm -f "$HOME/.config/systemd/user/$unit"
+   systemctl --user daemon-reload
    ```
 
-   Confirm it is no longer running before continuing. An `inactive` result and nonzero exit status from `is-active` are expected.
+   ```bash
+   # System-level (root system service installations only)
+   rm -f "/etc/systemd/system/$unit"
+   systemctl --system daemon-reload
+   ```
 
-2. Delete this server in the Mac app to revoke its server-side device credential and remove its dashboard record. Stopping the local service or running `logout` alone does not revoke the server-side credential.
-
-3. Remove the local binding, program, and unit file. The first command validates the machine ID, and `&&` proceeds only if the previous command succeeds. `rmdir` removes only empty directories; it does not recursively remove other machines from a shared home:
+4. After confirming that collection stopped successfully, remove the local binding, program, and process logs. Do not remove control files or locks while collection is running. The first command validates the machine ID, and `&&` proceeds only if the previous command succeeds. `rmdir` removes only empty directories, not other machines from a shared home:
 
    ```bash
    python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"[0-9a-f]{32}", sys.argv[1]) and sys.argv[1] != "0" * 32 else "Invalid machine ID")' "$machine_id" && \
      python3 "$agent_file" logout --config "$agent_config" && \
-     rm -f "$HOME/.config/systemd/user/$unit" "$agent_file" && \
-     systemctl --user daemon-reload && \
-     rm -f "$agent_dir/.install.lock" "$agent_config.lock" && \
+     rm -f "$agent_file" "$agent_dir/.install.lock" "$agent_dir/background-mode" "$agent_config.lock" \
+       "$agent_config.background.json" "$agent_config.background.lock" "$agent_config.background.stop" \
+       "$agent_config.background.log" "$agent_config.background.log.1" && \
      rmdir "$agent_dir" "$config_dir"
    ```
 
-Always pass this machine's explicit `--config` path. A bare `logout` uses the legacy default path. Do not disable linger for the Linux user, because other user services may depend on it. To enroll again or switch app accounts, complete this removal process and rerun the installer.
+Always pass this machine's explicit `--config` path; a bare `logout` uses the legacy default path. Do not disable linger for the installation user, because other user services may depend on it. To enroll again or switch app accounts, complete this removal process and rerun the installer.
 
 ## Storage paths and shared home directories
 
@@ -136,7 +191,11 @@ The installer stores separate files for each host using `/etc/machine-id`. Here,
 | --- | --- |
 | Client | `~/.local/share/gpu-radar/hosts/<machine-id>/gpu-radar-agent.pyz` |
 | Device configuration | `~/.config/gpu-radar/hosts/<machine-id>/agent.json`, mode 0600 |
-| User service | `~/.config/systemd/user/gpu-radar-agent-<machine-id>.service` |
+| User service (when selected) | `~/.config/systemd/user/gpu-radar-agent-<machine-id>.service` |
+| System service (when selected) | `/etc/systemd/system/gpu-radar-agent-<machine-id>.service` |
+| Selected background mode | `background-mode` in the client directory |
+| Detached process state / control | Device configuration path with `.background.json`, `.background.lock`, and `.background.stop` suffixes |
+| Detached process logs | `agent.json.background.log` beside the device configuration; up to 1 MiB, with one `.log.1` backup |
 
 Multiple GPU servers sharing an NFS home therefore keep separate device credentials. The unit's `ConditionHost` allows it to start only on the corresponding machine. Every host must have a valid, unique `/etc/machine-id`; administrators cloning systems should ensure this.
 
@@ -151,8 +210,9 @@ If the installer finds a legacy flat `~/.config/gpu-radar/agent.json` or `gpu-ra
 | GitHub download times out | Use the complete Aliyun mirror command above, including `--mirror aliyun` |
 | `An interactive SSH terminal is required` | Open a normal terminal on the target server, or use `ssh -t` for direct SSH; avoid gateway remote-execution modes without a TTY |
 | `nvidia-smi is missing` / real collection fails | Run `nvidia-smi` as the same user; ask an administrator to fix the driver, PATH, or device read permissions |
-| `Reboot startup was NOT enabled` | Ask an administrator to enable linger for the actual Linux user, then rerun the installer |
-| `systemd user manager is unavailable` / `Failed to connect to bus` | Confirm linger is enabled, log out and reconnect, and set the two environment variables above. If it still fails, ask an administrator to check the systemd user manager. Setting variables alone does not create it |
+| `Reboot startup was NOT enabled` (older installer) | Download the current installer again. Docker defaults to a detached process; `--background process` selects it explicitly |
+| `Automatic startup ... NOT configured` | A detached collector is running, but restart recovery is not configured. Run `background start` after a restart, or integrate with container startup |
+| `systemd user manager is unavailable` / `Failed to connect to bus` | If systemd is required, ask an administrator to check linger and the user manager, reconnect, and set the variables above. Docker can use the default auto mode or process mode; environment variables alone cannot create systemd |
 | Installation is in an unexpected directory | The installer uses the executing account's home; check whether sudo was applied to `bash`. `--username` names the app account and does not switch Linux users |
 | `Unsafe directory` | Inspect the ownership and permissions of the **specific directory** named in the error; see below |
 | Legacy binding, account, or name mismatch | Preserve the configuration. Use the existing binding's parameters or follow the removal procedure above; contact the maintainer before migrating a legacy installation |
@@ -229,7 +289,7 @@ For `.pyz`, replace the template's `ExecStart` with absolute Python and client p
 ExecStart=/usr/bin/python3 %h/.local/share/gpu-radar/gpu-radar-agent.pyz run --config %h/.config/gpu-radar/agent.json
 ```
 
-If there is no systemd user manager, an administrator must use another existing process manager to run the same `run` command. The installer does not automatically choose an alternative background mechanism.
+Without systemd, the installer defaults to a detached background process. Manual deployments can also use `background start --config /path/agent.json`. Recovery after a container restart requires integration with its entrypoint or an existing process manager.
 
 ### Administrator-managed system service
 
@@ -238,7 +298,7 @@ If there is no systemd user manager, an administrator must use another existing 
 1. Install the package in `/opt/gpu-radar/venv`, using a dedicated non-root Linux service user with NVIDIA device read permissions.
 2. Create `/var/lib/gpu-radar`, owned by that service user with mode 0700.
 3. **As the service user**, run an interactive `login --config /var/lib/gpu-radar/agent.json ...` and verify configuration mode 0600.
-4. Place the adjusted template at `/etc/systemd/system/gpu-radar-agent.service`, then run `systemctl daemon-reload` and `systemctl enable --now gpu-radar-agent`.
+4. Place the adjusted template at `/etc/systemd/system/gpu-radar-agent.service`, then run `systemctl --system daemon-reload` and `systemctl --system enable --now gpu-radar-agent`.
 
 The system service template is for manual setup; it does not automatically modify system accounts, sudo policy, or firewall rules.
 

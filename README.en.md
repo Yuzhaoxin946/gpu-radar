@@ -26,18 +26,18 @@ curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/in
 
 Replace `your_account` with your **app username**. Enter your app password when prompted; input is hidden, and the password does not belong in the command line. The server name defaults to its hostname. Append `--name lab-a` to choose a display name for a new installation.
 
-Requirements: Linux, Bash, curl, Python 3.6+, working `nvidia-smi`, user-level systemd, and outbound HTTPS to GitHub and the backend. Both regular users and root can install. The installer resolves the home directory of the Linux account actually running it; it does not use `SUDO_USER` or an inherited `HOME`. Running directly as root or using `sudo bash` on the right side of the pipeline normally installs under `/root`; `sudo -u other bash` installs in `other`'s home. If using sudo, apply it to `bash` (`curl … | sudo bash -s -- …`); applying it only to `curl` does not change the installation user.
+Requirements: Linux, Bash, curl, Python 3.6+, working `nvidia-smi`, and outbound HTTPS to GitHub and the backend. Both regular users and root can install. The installer resolves the home directory of the Linux account actually running it; it does not use `SUDO_USER` or an inherited `HOME`. Running directly as root or using `sudo bash` on the right side of the pipeline normally installs under `/root`; `sudo -u other bash` installs in `other`'s home. If using sudo, apply it to `bash` (`curl … | sudo bash -s -- …`); applying it only to `curl` does not change the installation user.
 
-Both cases use user-level systemd and linger. Root enables linger without another sudo command; regular users may be prompted for Linux administrative authentication, which is separate from the app password. The installer still cannot configure automatic background operation in containers or servers without a working systemd user manager. The installer:
+On first installation, the default `--background auto` selects an available background mode: regular users use user-level systemd with linger; new root installations prefer system-level systemd without requiring root linger; existing user services keep their current scope. Environments such as Docker without working systemd automatically use a detached background process, so missing boot startup support no longer blocks installation. The installer:
 
 - Downloads and verifies a standalone Agent, with no pip, Docker, or additional Python packages.
 - Checks real GPU collection and HTTPS connectivity before signing in and enrolling the server.
-- Configures a user-level systemd service to report every 5 seconds.
-- Checks linger and startup at boot; it requests administrative help when needed and reports failure when persistence cannot be confirmed.
+- Starts collection every 5 seconds and verifies that the first report is accepted.
+- Confirms active/enabled status for systemd services and also checks linger for user services.
 - Stores separate configurations and device credentials per host, supporting shared NFS home directories.
-- Preserves this host's binding on repeated installation without duplicate enrollment, and restores the previous installation if an update fails.
+- Preserves this host's binding on repeated installation without duplicate enrollment, and attempts to restore the previous installation if an update fails.
 
-Once the installer confirms the first report was accepted, the service is active/enabled, and Linger=yes, collection continues after SSH logout and is configured to start at boot. The first connection needs 5 continuous minutes of samples before showing green, yellow, or red. No inbound ports need to be opened on GPU servers.
+**All three modes continue collecting after SSH logout.** Systemd modes configure startup at boot. Detached process mode explicitly reports that restart recovery is not configured: **after a server or container restart, start it manually or integrate it into the container entrypoint / process manager**. On first installation, append `--background process` to choose the detached process explicitly, or `--background systemd` to require systemd and stop if it cannot be configured. Reinstallation preserves the existing mode. To change modes, first follow the stop and removal steps in the full guide; changing the option alone does not migrate an installation. The first connection needs 5 continuous minutes of samples before showing green, yellow, or red. No inbound ports need to be opened on GPU servers.
 
 To run a check without signing in or installing background services:
 
@@ -65,20 +65,21 @@ Initial enrollment requires an interactive SSH terminal. Some jump servers do no
 
 ## Everyday maintenance
 
-These commands apply to the current installer. On the target GPU server, use the same Linux user who installed it to inspect service status, recent logs, and linger:
+Manage collection as the same Linux user on the target GPU server. The installation result identifies user-level systemd, system-level systemd, or detached process mode. Existing root user services retain their user-level management commands. See the [Linux Agent guide](agent/README.en.md#inspect-and-manage-background-collection) for status, logs, starting, stopping, and removal for each mode.
+
+For Docker / detached process mode, inspect status directly:
 
 ```bash
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-unit="gpu-radar-agent-$(cat /etc/machine-id).service"
-systemctl --user status "$unit"
-journalctl --user -u "$unit" -n 30 --no-pager
-loginctl show-user "$(id -un)" -p Linger
+machine_id="$(cat /etc/machine-id)"
+agent_file="$HOME/.local/share/gpu-radar/hosts/$machine_id/gpu-radar-agent.pyz"
+agent_config="$HOME/.config/gpu-radar/hosts/$machine_id/agent.json"
+python3 "$agent_file" background status --config "$agent_config"
+tail -n 30 "$agent_config.background.log"
 ```
 
-To restart collection, use the variable above and run `systemctl --user restart "$unit"`.
+Replace `status` with `start` or `stop` to start or stop collection. After a container restart, run `start` if the installation files and configuration were preserved; a background process does not survive a container restart by itself.
 
-To update or retry, rerun the original installation command. It keeps this host's existing binding without creating another server record. `--username` and `--name` do not change an existing account binding or rename a server; a mismatch stops installation.
+To update or retry, rerun the original installation command. It keeps this host's existing binding and background mode without creating another server record. `--username` and `--name` do not change an existing account binding or rename a server; a mismatch stops installation.
 
 Hosts sharing an NFS home directory each need a valid, unique `/etc/machine-id`. The program, configuration, lock, and service are isolated by host. Existing manual installations using `gpu-radar-agent.service` remain unchanged. If the installer detects a legacy flat configuration or service, it stops; the owning host must be verified before migration.
 
@@ -92,7 +93,7 @@ See the [Linux Agent guide](agent/README.en.md) for stopping collection, uninsta
 | No invitation field in the registration form | Update the repository and rebuild the Mac app; older apps can still sign in to existing accounts |
 | GitHub download times out | Use the Aliyun mirror command, including `--mirror aliyun` |
 | An interactive terminal is required | Log in to the target GPU host through a normal SSH shell, then paste the command, especially when using a jump server |
-| Linger or the user service manager is unavailable | Follow the installer's administrator guidance, reconnect through SSH, and retry; startup at boot is not confirmed until installation succeeds |
+| Docker has no systemd / linger is unavailable | A first installation defaults to a detached process that survives SSH logout; restart recovery requires a manual start or container startup integration. Only `--background systemd` requires systemd readiness |
 | `Unsafe directory` | Verify the owner and permissions of the exact directory in the error. Fix only a directory you have confirmed you manage; do not recursively change your entire home directory's permissions. See the Linux guide |
 | A legacy configuration is detected | Preserve the existing configuration and service until the owning host is verified. Do not copy device credentials to other servers or delete the configuration just to bypass the check |
 | GPUs stay gray | Allow 5 continuous minutes initially. If they remain gray, inspect collection logs, the network, and recent reports |

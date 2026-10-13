@@ -7,11 +7,11 @@
 ## 安装前准备
 
 - Linux GPU 服务器，有正常工作的 NVIDIA 驱动，当前 SSH 用户执行 `nvidia-smi` 能看到显卡。
-- `bash`、`curl`、**Python 3.6+**，以及可用的用户级 systemd。安装器使用独立 `.pyz`，不需要 pip，不修改系统 Python。
+- `bash`、`curl`、**Python 3.6+**。安装器使用独立 `.pyz`，不需要 pip，不修改系统 Python。
 - 向服务维护者私下获取邀请码，在最新版 macOS App 中注册账户。邀请码只用于创建新账户；已有账户登录和安装 Agent 不需要，也不会消耗邀请码名额。App 账户与 Linux/SSH 账户是两回事；一台服务器上其他人的训练也会计入 GPU 指标，不要求他们注册 App。
 - 能通过 HTTPS 出站访问 `https://123.56.135.166`，以及 GitHub Release 下载地址；GitHub 不通时用下方阿里云镜像。**GPU 服务器不需要新增入站端口。**
 
-使用准备安装客户端的 Linux 用户打开交互式终端，普通用户和 root 均可。不要把 App 密码写进命令行。通过 JumpServer 等跳板机时，远程执行模式可能没有 `/dev/tty`；请先正常登录目标服务器的终端，再粘贴安装命令。直接 SSH 可用 `ssh -t your-gpu-host` 请求终端。没有可用用户级 systemd 的容器或服务器仍不能通过此安装器配置自动常驻。
+使用准备安装客户端的 Linux 用户打开交互式终端，普通用户和 root 均可。不要把 App 密码写进命令行。通过 JumpServer 等跳板机时，远程执行模式可能没有 `/dev/tty`；请先正常登录目标服务器的终端，再粘贴安装命令。直接 SSH 可用 `ssh -t your-gpu-host` 请求终端。Docker 等没有 systemd 的环境也支持安装，会使用独立后台进程。
 
 ## 一键安装
 
@@ -21,7 +21,7 @@
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account
 ```
 
-按提示输入 App 密码。安装器默认使用当前云端服务，无需填写 IP 或端口；它会校验下载文件、采集真实 GPU 数据、验证首次上报，然后启用后台服务。服务器名称默认是短主机名，也可以自行指定：
+按提示输入 App 密码。安装器默认使用当前云端服务，无需填写 IP 或端口；它会校验下载文件、采集真实 GPU 数据、验证首次上报，然后启动后台采集。服务器名称默认是短主机名，也可以自行指定：
 
 ```bash
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account --name lab-a
@@ -37,13 +37,23 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 安装位置由**实际运行安装器的 Linux 用户**决定。安装器按有效 UID 查询该账户的主目录，不使用 `SUDO_USER`，也不会沿用其他账户的 `HOME`。普通用户直接运行时装到自己的主目录；root 直接运行或通过 `sudo bash` 运行时，通常装到 `/root`。如需 sudo，把它放在管道右侧（`curl … | sudo bash -s -- …`）；只给 `curl` 加 sudo 不会切换安装用户。`curl … | sudo -u other bash -s -- …` 会安装到 `other` 的主目录。`--username` 始终指 App 账户，不影响 Linux 安装用户。
 
-普通用户和 root 都使用 `systemctl --user` 服务。安装器检查并尝试开启该 Linux 用户的 `linger`，让服务在退出 SSH 后继续运行，并在机器启动时自动运行。root 直接开启 linger，无需再次调用 sudo；普通用户遇到需要管理员权限的服务器策略时，会提示是否通过 `sudo` 开启。此时 sudo 如询问密码，要求的是 **Linux 用户密码**，不是 App 密码。没有权限时，请让管理员执行：
+### 后台方式与重启行为
 
-```bash
-sudo loginctl enable-linger your_linux_username
-```
+首次安装时，默认的 `--background auto` 按环境选择后台方式：
 
-将 `your_linux_username` 替换为实际运行安装器的 Linux 用户名，然后以该用户重新登录并重跑安装器。只有安装器报告 `service active and enabled; Linger=yes` 和 `First report accepted` 才表示后台安装及首次上报检查成功。
+| 环境 | 后台方式 | 退出 SSH 后 | 服务器 / 容器重启后 |
+| --- | --- | --- | --- |
+| 普通用户，有可用用户级 systemd 和 linger | 用户级 systemd | 继续运行 | 已配置开机启动 |
+| root 新安装，有可用系统级 systemd | 系统级 systemd，无需 root linger | 继续运行 | 已配置开机启动 |
+| Docker 或其他没有可用 systemd 的环境 | 独立后台进程 | 继续运行 | 需手动启动或接入容器启动流程 |
+
+重复安装会保留此前的后台方式和设备绑定。已有用户级服务继续沿用，包括 root 的旧安装，不会自动迁移到系统级服务。首次安装可在命令末尾追加 `--background process` 明确选择独立进程；追加 `--background systemd` 则要求必须配置 systemd，条件不满足时停止。显式参数与已安装方式冲突时也会停止；要更换方式，先按下方对应的停止、卸载流程操作，再重新安装，不要直接删除方式记录或锁文件。
+
+用户级 systemd 会检查并尝试开启安装用户的 `linger`。普通用户遇到需要管理员权限的策略时，安装器会提示是否通过 `sudo` 开启；这里要求的是 **Linux 用户密码**，不是 App 密码。管理员也可执行 `sudo loginctl enable-linger your_linux_username`。首次安装的 `auto` 模式无法配置时会退回独立进程；强制 `systemd` 或已有 systemd 安装会报错，不会悄悄改变运行方式。
+
+安装结果会说明所选方式，并验证 `First report accepted`。systemd 模式还确认服务 active/enabled，用户级模式确认 linger；独立进程模式会明确提示 **NOT configured for restart**，这表示已在后台运行，但没有配置重启恢复。
+
+在 Docker 内退出 SSH 不会停止独立采集进程，但停止 / 重启容器会终止容器内的进程。重启后可用下方 `background start` 命令恢复，或让容器 entrypoint / 已有进程管理器启动采集。还需保留客户端及配置，并确保容器中的 `/etc/machine-id` 有效、稳定且与其他受监控机器不同；不要把同一份设备凭据复制给多个容器。
 
 打开 Mac App 并登录同一 App 账户，即可看到服务器。新接入设备需要积累完整 5 分钟的连续数据后才显示状态颜色。
 
@@ -61,11 +71,9 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 ## 查看状态和管理后台服务
 
-以下命令适用于一键安装器。在目标 GPU 服务器、同一个 Linux 用户的登录终端中运行，确保 `HOME` 是该账户的主目录；例如通过 `sudo bash` 安装到 root 时，可先执行 `sudo -i` 进入 root 的登录环境。每次新开终端先设置这些变量：
+以下命令适用于一键安装器。在目标 GPU 服务器、同一个 Linux 用户的登录终端中运行，确保 `HOME` 是该账户的主目录；例如通过 `sudo bash` 安装到 root 时，可先执行 `sudo -i`。每次新开终端先设置变量：
 
 ```bash
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 machine_id="$(cat /etc/machine-id)"
 unit="gpu-radar-agent-${machine_id}.service"
 agent_dir="$HOME/.local/share/gpu-radar/hosts/$machine_id"
@@ -74,29 +82,61 @@ agent_file="$agent_dir/gpu-radar-agent.pyz"
 agent_config="$config_dir/agent.json"
 ```
 
-查看进程、开机自启、linger、最近日志和本地账户绑定：
+用 `python3 "$agent_file" status --config "$agent_config"` 查看本地绑定，不会显示设备凭据；是否持续上报应以 Mac App 的最近更新时间为准。按安装结果选择下面对应的后台方式，不要同时启动两种方式。
+
+### Docker / 独立进程
 
 ```bash
+python3 "$agent_file" background status --config "$agent_config"
+tail -n 50 "$agent_config.background.log"
+```
+
+| 操作 | 命令 |
+| --- | --- |
+| 启动或重启容器后恢复 | `python3 "$agent_file" background start --config "$agent_config"` |
+| 停止 | `python3 "$agent_file" background stop --config "$agent_config"` |
+| 检查进程 | `python3 "$agent_file" background status --config "$agent_config"` |
+
+重启采集时先执行 `stop`，确认成功后再执行 `start`。`start` 重复执行不会启动第二个采集进程；`stop` 最多等待 25 秒。`status` 退出码 0 表示运行中，3 表示未运行，1 表示身份检查等错误。这种方式不配置服务器或容器重启后的自动恢复；进程退出后也需要重新启动。可用 `tail -f "$agent_config.background.log"` 跟随日志，Ctrl+C 只退出日志查看。日志达到 1 MiB 时轮换，保留一份 `.log.1` 备份。容器有启动脚本时，可在脚本中使用相同的绝对文件路径执行 `background start`；容器自身仍须由原有主进程保持运行。也可以让已有容器进程管理器监督 `python3 "$agent_file" run --config "$agent_config"`。
+
+如果宿主机策略会在注销时清理会话内全部进程（例如 `KillUserProcesses=yes`），独立进程也可能被清理；这类宿主机应使用系统服务或管理员提供的进程管理器。
+
+### 普通用户 systemd（包括 root 的既有用户级服务）
+
+```bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 systemctl --user status "$unit" --no-pager
 systemctl --user is-enabled "$unit"
 loginctl show-user "$(id -un)" -p Linger
 journalctl --user -u "$unit" -n 50 --no-pager
-python3 "$agent_file" status --config "$agent_config"
 ```
 
-`status` 子命令不会显示设备凭据，但只检查本地绑定；是否持续上报应以 Mac App 中的最近更新时间为准。实时跟随日志可用 `journalctl --user -u "$unit" -f`，按 Ctrl+C 退出日志查看不会停止采集。
+### root 系统级 systemd
 
-| 操作 | 命令 | 效果 |
+仅用于安装结果为系统级服务的 root 安装：
+
+```bash
+systemctl --system status "$unit" --no-pager
+systemctl --system is-enabled "$unit"
+journalctl --system -u "$unit" -n 50 --no-pager
+```
+
+两种 systemd 的操作相同，用户级带 `--user`，系统级使用 `--system`：
+
+| 操作 | 用户级命令 | 系统级命令 |
 | --- | --- | --- |
-| 重启 | `systemctl --user restart "$unit"` | 重启采集，保留账户绑定和开机自启 |
-| 暂时停止 | `systemctl --user stop "$unit"` | 当前停止；仍可在下次开机时启动 |
-| 重新启动 | `systemctl --user start "$unit"` | 恢复已安装的采集服务 |
-| 停止并关闭自启 | `systemctl --user disable --now "$unit"` | 立即停止，之后不再开机启动 |
-| 恢复后台和自启 | `systemctl --user enable --now "$unit"` | 恢复后台服务和开机启动 |
+| 重启采集 | `systemctl --user restart "$unit"` | `systemctl --system restart "$unit"` |
+| 暂停，保留开机启动 | `systemctl --user stop "$unit"` | `systemctl --system stop "$unit"` |
+| 恢复采集 | `systemctl --user start "$unit"` | `systemctl --system start "$unit"` |
+| 停止并关闭开机启动 | `systemctl --user disable --now "$unit"` | `systemctl --system disable --now "$unit"` |
+| 恢复采集与开机启动 | `systemctl --user enable --now "$unit"` | `systemctl --system enable --now "$unit"` |
+
+日志命令将 `-n 50 --no-pager` 换成 `-f` 即可实时跟随，Ctrl+C 不停止采集。
 
 ### 更新或重试安装
 
-重新执行原来的一键安装命令即可。安装器会保留本机现有设备绑定，不重复注册设备；无需把密码保存在服务器上。已有绑定的账户或名称与显式提供的参数不一致时会停止，因此重试时使用原账户名和原名称，或不传 `--name`。
+重新执行原来的一键安装命令即可。安装器会保留本机现有设备绑定及后台方式，不重复注册设备；无需把密码保存在服务器上。已有绑定的账户或名称与显式提供的参数不一致时会停止，因此重试时使用原账户名和原名称，或不传 `--name`。
 
 下载或预检查失败不会停止现有服务；激活失败会尝试恢复原程序和服务，新登记的配置会保留供重试使用。修改 App 密码不会自动撤销已经绑定的设备。
 
@@ -104,29 +144,44 @@ python3 "$agent_file" status --config "$agent_config"
 
 先运行本节开头的变量设置，再按顺序操作：
 
-1. 停止本机服务并关闭自启：
+1. 按实际后台方式停止采集，systemd 模式同时关闭自启：
+
+   | 后台方式 | 停止命令 | 状态检查 |
+   | --- | --- | --- |
+   | 独立进程 | `python3 "$agent_file" background stop --config "$agent_config"` | `python3 "$agent_file" background status --config "$agent_config"` |
+   | 用户级 systemd | `systemctl --user disable --now "$unit"` | `systemctl --user is-active "$unit"` |
+   | 系统级 systemd | `systemctl --system disable --now "$unit"` | `systemctl --system is-active "$unit"` |
+
+   确认已停止后继续。systemd 的 `is-active` 显示 `inactive` 并返回非零退出码是预期现象。若接入了容器启动脚本或其他进程管理器，也要移除对应的启动配置。
+
+2. 在 Mac App 中删除这台服务器，撤销其服务端设备凭据并清理看板记录。只停止本机采集或执行 `logout` 不会撤销服务端凭据。
+
+3. 如果使用 systemd，移除对应的服务文件并重载。只执行匹配实际安装方式的一组命令；独立进程无需此步：
 
    ```bash
-   systemctl --user disable --now "$unit"
-   systemctl --user is-active "$unit"
+   # 用户级（包括 root 的既有用户级服务）
+   rm -f "$HOME/.config/systemd/user/$unit"
+   systemctl --user daemon-reload
    ```
 
-   确认服务已不再运行后继续。`is-active` 显示 `inactive` 并返回非零退出码是预期现象。
+   ```bash
+   # 系统级（仅 root 系统级安装）
+   rm -f "/etc/systemd/system/$unit"
+   systemctl --system daemon-reload
+   ```
 
-2. 在 Mac App 中删除这台服务器，撤销其服务端设备凭据并清理看板记录。只停止本机服务或执行 `logout` 不会撤销服务端凭据。
-
-3. 清理本机绑定、程序和服务文件。第一条命令验证 machine-id，`&&` 确保前一步成功才继续；`rmdir` 只删除空目录，不会递归删除共享 Home 中的其他主机：
+4. 确认停止成功后，清理本机绑定、程序和进程日志。运行中不要删除控制文件或锁。第一条命令验证 machine-id，`&&` 确保前一步成功才继续；`rmdir` 只删除空目录，不会递归删除共享 Home 中的其他主机：
 
    ```bash
    python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"[0-9a-f]{32}", sys.argv[1]) and sys.argv[1] != "0" * 32 else "Invalid machine ID")' "$machine_id" && \
      python3 "$agent_file" logout --config "$agent_config" && \
-     rm -f "$HOME/.config/systemd/user/$unit" "$agent_file" && \
-     systemctl --user daemon-reload && \
-     rm -f "$agent_dir/.install.lock" "$agent_config.lock" && \
+     rm -f "$agent_file" "$agent_dir/.install.lock" "$agent_dir/background-mode" "$agent_config.lock" \
+       "$agent_config.background.json" "$agent_config.background.lock" "$agent_config.background.stop" \
+       "$agent_config.background.log" "$agent_config.background.log.1" && \
      rmdir "$agent_dir" "$config_dir"
    ```
 
-请务必传入上面的本机 `--config`；直接运行裸 `logout` 会使用旧版默认路径。无需关闭该 Linux 用户的 linger，因为其他用户级服务也可能依赖它。要重新绑定或改用其他 App 账户，完成以上删除流程后重新运行安装器。
+请务必传入本机 `--config`；裸 `logout` 使用旧版默认路径。无需关闭安装用户的 linger，其他用户级服务也可能依赖它。要重新绑定或改用其他 App 账户，完成以上删除流程后重新运行安装器。
 
 ## 存储路径与共享 Home
 
@@ -136,7 +191,11 @@ python3 "$agent_file" status --config "$agent_config"
 | --- | --- |
 | 客户端 | `~/.local/share/gpu-radar/hosts/<machine-id>/gpu-radar-agent.pyz` |
 | 设备配置 | `~/.config/gpu-radar/hosts/<machine-id>/agent.json`，权限 0600 |
-| 用户服务 | `~/.config/systemd/user/gpu-radar-agent-<machine-id>.service` |
+| 用户级服务（该模式） | `~/.config/systemd/user/gpu-radar-agent-<machine-id>.service` |
+| 系统级服务（该模式） | `/etc/systemd/system/gpu-radar-agent-<machine-id>.service` |
+| 后台方式记录 | 客户端目录下的 `background-mode` |
+| 独立进程状态 / 控制 | 设备配置路径追加 `.background.json`、`.background.lock`、`.background.stop` |
+| 独立进程日志 | 设备配置旁的 `agent.json.background.log`，最多 1 MiB，保留一份 `.log.1` 备份 |
 
 因此多台 GPU 服务器共享 NFS Home 时，也不会共用同一台设备的凭据。服务中的 `ConditionHost` 限定它只能在对应机器启动。每台主机的 `/etc/machine-id` 必须有效且唯一；克隆系统的管理员应确保这一点。
 
@@ -151,8 +210,9 @@ python3 "$agent_file" status --config "$agent_config"
 | GitHub 下载超时 | 使用上面的阿里云镜像完整命令，包含 `--mirror aliyun` |
 | `An interactive SSH terminal is required` | 正常登录目标服务器终端后重试，或直接 SSH 使用 `ssh -t`；避免跳板机无 TTY 的远程执行模式 |
 | `nvidia-smi is missing` / 真实采集失败 | 先在同一用户下执行 `nvidia-smi`，请管理员修复驱动、PATH 或设备读取权限 |
-| `Reboot startup was NOT enabled` | 请管理员为实际 Linux 用户开启 linger，再重跑安装器 |
-| `systemd user manager is unavailable` / `Failed to connect to bus` | 确认 linger 已开启，退出后重新登录，设置上文两个环境变量；仍失败需管理员检查用户级 systemd。变量本身不会创建服务管理器 |
+| `Reboot startup was NOT enabled`（旧安装器） | 重新下载当前安装器；Docker 环境默认自动使用独立进程，也可指定 `--background process` |
+| `Automatic startup ... NOT configured` | 独立进程已启动，但没有配置重启恢复；重启后执行 `background start`，或接入容器启动流程 |
+| `systemd user manager is unavailable` / `Failed to connect to bus` | 若要求 systemd，请管理员检查 linger 和用户级服务管理器，重新登录并设置上文环境变量。Docker 可用默认 auto 或 process；设置环境变量不会凭空创建 systemd |
 | 安装位置与预期不同 | 安装器使用实际执行账户的主目录；检查是否在 `bash` 一侧使用了 sudo。`--username` 是 App 账户名，不会切换 Linux 用户 |
 | `Unsafe directory` | 检查报错中**具体目录**的所有者和权限，见下文 |
 | 旧版绑定、名称或账户不匹配 | 保留原配置；使用原绑定参数，或按上面的正式卸载流程处理，旧版安装应先联系维护者迁移 |
@@ -229,7 +289,7 @@ loginctl show-user "$(id -un)" -p Linger
 ExecStart=/usr/bin/python3 %h/.local/share/gpu-radar/gpu-radar-agent.pyz run --config %h/.config/gpu-radar/agent.json
 ```
 
-没有用户级 systemd 的机器，需要管理员用其他已有进程管理器运行相同的 `run` 命令；一键安装器不会自动选择其他后台方式。
+没有 systemd 时，一键安装器默认使用独立后台进程。手动部署也可使用 `background start --config /path/agent.json`；要随容器重启恢复，需接入容器 entrypoint 或已有进程管理器。
 
 ### 管理员配置系统级 systemd
 
@@ -238,7 +298,7 @@ ExecStart=/usr/bin/python3 %h/.local/share/gpu-radar/gpu-radar-agent.pyz run --c
 1. 在 `/opt/gpu-radar/venv` 安装本包，使用专门的非 root Linux 服务用户，并授予读取 NVIDIA 设备所需权限。
 2. 创建 `/var/lib/gpu-radar`，归服务用户所有，权限 0700。
 3. **以服务用户**交互式执行 `login --config /var/lib/gpu-radar/agent.json ...`，确认配置权限 0600。
-4. 把调整好的模板放到 `/etc/systemd/system/gpu-radar-agent.service`，执行 `systemctl daemon-reload` 和 `systemctl enable --now gpu-radar-agent`。
+4. 把调整好的模板放到 `/etc/systemd/system/gpu-radar-agent.service`，执行 `systemctl --system daemon-reload` 和 `systemctl --system enable --now gpu-radar-agent`。
 
 系统级模板只供手工配置，不会自动修改系统账户、sudo 配置或防火墙。
 

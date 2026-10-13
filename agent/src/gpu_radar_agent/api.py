@@ -24,7 +24,7 @@ class Client:
         self.opener = build_opener(NoRedirect())
 
     def request(self, method: str, path: str, body: Optional[dict] = None, token: Optional[str] = None):
-        headers = {"Accept": "application/json", "User-Agent": "gpu-radar-agent/0.1.0"}
+        headers = {"Accept": "application/json", "User-Agent": "gpu-radar-agent/0.1.1"}
         data = None
         if body is not None:
             data = json.dumps(body, allow_nan=False).encode("utf-8")

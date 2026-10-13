@@ -26,18 +26,18 @@ curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/in
 
 把 `your_account` 替换为 **App 账户名**。按提示输入 App 密码；密码不会回显，也不需要写进命令行。服务器名称默认取主机名，可追加 `--name lab-a`。
 
-安装需要 Linux、Bash、curl、Python 3.6+、可正常运行的 `nvidia-smi`、用户级 systemd，以及到 GitHub 和服务端的 HTTPS 出站连接。普通用户和 root 都可以安装：安装器使用运行它的 Linux 账户主目录，按实际用户身份确定路径，不使用 `SUDO_USER` 或沿用的 `HOME`。root 直接执行或在管道右侧使用 `sudo bash` 时通常安装到 `/root`；`sudo -u other bash` 则安装到 `other` 的主目录。若需要 sudo，应放在 `bash` 一侧（`curl … | sudo bash -s -- …`），只给 `curl` 加 sudo 不会切换安装用户。
+安装需要 Linux、Bash、curl、Python 3.6+、可正常运行的 `nvidia-smi`，以及到 GitHub 和服务端的 HTTPS 出站连接。普通用户和 root 都可以安装：安装器使用运行它的 Linux 账户主目录，按实际用户身份确定路径，不使用 `SUDO_USER` 或沿用的 `HOME`。root 直接执行或在管道右侧使用 `sudo bash` 时通常安装到 `/root`；`sudo -u other bash` 则安装到 `other` 的主目录。若需要 sudo，应放在 `bash` 一侧（`curl … | sudo bash -s -- …`），只给 `curl` 加 sudo 不会切换安装用户。
 
-两种用户均使用用户级 systemd 和 linger。root 开启 linger 无需再次调用 sudo；普通用户可能收到 Linux 管理权限提示，与 App 密码不同。没有可用用户级 systemd 的容器或服务器仍不能通过此安装器配置自动常驻。安装器会：
+首次安装时，默认 `--background auto` 会选择可用的后台方式：普通用户使用用户级 systemd 和 linger；root 新安装优先使用系统级 systemd，不依赖 root 的 linger；已有用户级服务继续沿用。Docker 等没有可用 systemd 的环境会自动使用独立后台进程，不再因为无法配置开机启动而中止。安装器会：
 
 - 下载并校验独立 Agent，无需 pip、Docker 或额外 Python 包。
 - 检查真实 GPU 采集和 HTTPS 连接，再登录并绑定账户。
-- 配置每 5 秒上报的用户级 systemd 服务。
-- 检查 linger 和开机启动；必要时提示管理员授权，无法确认时明确报错。
+- 启动每 5 秒上报的后台采集，并验证首条数据被接受。
+- systemd 模式检查服务 active/enabled；用户级服务还检查 linger。
 - 每台主机独立保存配置与设备凭据，支持多台服务器共享 NFS 用户目录。
-- 重复执行时保留本机已有绑定，不重复登记服务器；更新失败时恢复原有安装。
+- 重复执行时保留本机已有绑定，不重复登记服务器；更新失败时尝试恢复原有安装。
 
-安装器确认首条数据被接受、服务 active/enabled 且 Linger=yes 后，退出 SSH 仍会采集，并配置为开机启动。第一次接入需要连续积累 5 分钟数据，之后显示绿、黄、红状态。GPU 服务器无需新增入站端口。
+**三种后台方式都可在退出 SSH 后继续采集。** systemd 模式会配置开机启动；独立进程模式会明确显示未配置重启恢复，**服务器或容器重启后需要手动启动，或接入容器的 entrypoint / 进程管理器**。首次安装可追加 `--background process` 明确使用独立进程，或 `--background systemd` 要求必须配置 systemd，失败时停止。重复安装保留原方式；更换方式需先按完整指南停止、卸载，不能直接用参数切换。首次接入需要连续积累 5 分钟数据，之后显示绿、黄、红状态。GPU 服务器无需新增入站端口。
 
 只做预检，不登录、不安装后台服务：
 
@@ -65,20 +65,21 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 ## 日常查看与维护
 
-以下命令适用于当前一键安装器。在目标 GPU 服务器上，以安装时的 Linux 用户查看状态、最近日志和开机运行设置：
+在目标 GPU 服务器上，以安装时的 Linux 用户管理采集。安装结果会说明使用用户级 systemd、系统级 systemd 或独立进程；root 的旧用户级安装仍按用户级方式维护。完整的状态、日志、启动、停止和卸载命令见 [Linux Agent 文档](agent/README.md#查看状态和管理后台服务)。
+
+Docker / 独立进程模式可直接查看状态：
 
 ```bash
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-unit="gpu-radar-agent-$(cat /etc/machine-id).service"
-systemctl --user status "$unit"
-journalctl --user -u "$unit" -n 30 --no-pager
-loginctl show-user "$(id -un)" -p Linger
+machine_id="$(cat /etc/machine-id)"
+agent_file="$HOME/.local/share/gpu-radar/hosts/$machine_id/gpu-radar-agent.pyz"
+agent_config="$HOME/.config/gpu-radar/hosts/$machine_id/agent.json"
+python3 "$agent_file" background status --config "$agent_config"
+tail -n 30 "$agent_config.background.log"
 ```
 
-需要重启采集时，使用上面设置的变量执行 `systemctl --user restart "$unit"`。
+将 `status` 换成 `start` 或 `stop` 即可启动或停止。容器重启后保留了安装文件与配置时，执行 `start` 恢复采集；后台进程不会自行跨容器重启存活。
 
-更新或重试时，重新执行原安装命令即可保留本机已有绑定，不会重复登记服务器。`--username` 和 `--name` 不是改绑、改名选项；已有绑定与参数不一致时会停止。
+更新或重试时，重新执行原安装命令即可保留本机已有绑定及后台方式，不会重复登记服务器。`--username` 和 `--name` 不是改绑、改名选项；已有绑定与参数不一致时会停止。
 
 共享 NFS Home 的主机必须各自拥有有效且唯一的 `/etc/machine-id`。程序、配置、锁和服务按主机隔离。旧版手动安装的 `gpu-radar-agent.service` 保持原样；安装器遇到旧版平铺配置或服务会停止，需核实所属主机后迁移。
 
@@ -92,7 +93,7 @@ loginctl show-user "$(id -un)" -p Linger
 | 注册界面没有邀请码输入框 | 更新仓库并重新构建 Mac App；旧版仍可登录已有账户 |
 | GitHub 下载超时 | 使用阿里云镜像命令，并保留 `--mirror aliyun` |
 | 提示需要交互式终端 | 先正常 SSH 登录目标 GPU 主机，再粘贴命令，尤其是经跳板机连接时 |
-| linger 或用户服务不可用 | 按安装器提示请管理员协助，然后重新 SSH 登录并重试；成功前不能认为已配置开机运行 |
+| Docker 没有 systemd / linger 不可用 | 首次安装默认自动退回独立进程，退出 SSH 后继续运行；重启恢复需手动启动或配置容器启动流程。只有 `--background systemd` 模式要求这些条件 |
 | `Unsafe directory` | 核实错误中具体目录的属主和权限，仅针对确认归本人管理的目录修复；不要递归修改整个 Home 的权限，详见 Linux 指南 |
 | 检测到 legacy 配置 | 保留旧配置和服务，先核实所属主机；不要复制设备凭据到其他服务器或直接删除配置来绕过检查 |
 | GPU 一直显示灰色 | 首次等待连续 5 分钟；之后仍灰色时，查看采集日志、网络和最近上报情况 |

@@ -29,11 +29,11 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SERVER = "https://123.56.135.166"
-ARTIFACT_URL = "https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v0.2.3/gpu-radar-agent.pyz"
-ALIYUN_ARTIFACT_URL = SERVER + "/agent/releases/0.1.0/gpu-radar-agent.pyz"
+ARTIFACT_URL = "https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v0.2.4/gpu-radar-agent.pyz"
+ALIYUN_ARTIFACT_URL = SERVER + "/agent/releases/0.1.1/gpu-radar-agent.pyz"
 ARTIFACT_REDIRECT_HOSTS = frozenset({"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"})
-INSTALLER_USER_AGENT = "gpu-radar-installer/0.2.3"
-ARTIFACT_SHA256 = "5a83181728bcc9e932f0b1ec8639246795643759b48b7400b908b5945374f5bf"
+INSTALLER_USER_AGENT = "gpu-radar-installer/0.2.4"
+ARTIFACT_SHA256 = "05e6e6fb2f210f7897eb04f025896ebd7f2868f85beb122e0bf37f3c5ccab2ba"
 LEGACY_SERVICE = "gpu-radar-agent.service"
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 
@@ -294,7 +294,13 @@ def ensure_linger(username):
         raise InstallError("Reboot startup was NOT enabled. Ask an administrator to run: sudo loginctl enable-linger {} . Then rerun the installer; no account was enrolled.".format(shlex.quote(username)))
 
 
-def systemd_preflight(username):
+def systemd_preflight(username, scope="user"):
+    if scope == "system":
+        if os.geteuid() != 0 or not shutil.which("systemctl"):
+            raise InstallError("A root account and systemd are required for a system service.")
+        if command(["systemctl", "--system", "show-environment"], check=False).returncode:
+            raise InstallError("The system service manager is unavailable (common inside containers).")
+        return
     for executable in ("systemctl", "loginctl"):
         if not shutil.which(executable):
             raise InstallError("{} is required for persistent user service installation (including root). Containers without systemd need an existing process manager instead.".format(executable))
@@ -337,10 +343,16 @@ def systemd_escape(value):
     return value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
 
 
-def unit_text(machine_id):
+def unit_text(machine_id, scope="user", home=None):
     validate_machine_id(machine_id)
     # Escape systemd specifiers and argument syntax, retaining the selected Python.
     executable = systemd_escape(sys.executable)
+    if scope not in {"user", "system"}:
+        raise InstallError("Unknown service scope.")
+    if scope == "system" and (home is None or not Path(home).is_absolute()):
+        raise InstallError("A system service requires an absolute account home.")
+    home_path = "%h" if scope == "user" else systemd_escape(str(home))
+    target = "default.target" if scope == "user" else "multi-user.target"
     gpu_directory = str(Path(shutil.which("nvidia-smi") or "/usr/bin/nvidia-smi").parent)
     search_path = systemd_escape(gpu_directory + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     return ("""[Unit]
@@ -352,10 +364,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.local/share/gpu-radar/hosts/{machine_id}
+WorkingDirectory="{home}/.local/share/gpu-radar/hosts/{machine_id}"
 Environment="PATH={search_path}"
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=\"{python}\" \"%h/.local/share/gpu-radar/hosts/{machine_id}/gpu-radar-agent.pyz\" run --config \"%h/.config/gpu-radar/hosts/{machine_id}/agent.json\" --interval 5
+ExecStart=\"{python}\" \"{home}/.local/share/gpu-radar/hosts/{machine_id}/gpu-radar-agent.pyz\" run --config \"{home}/.config/gpu-radar/hosts/{machine_id}/agent.json\" --interval 5
 Restart=on-failure
 RestartPreventExitStatus=3 4
 RestartSec=15
@@ -366,54 +378,131 @@ UMask=0077
 SyslogIdentifier=gpu-radar-agent
 
 [Install]
-WantedBy=default.target
-""".format(python=executable, search_path=search_path, machine_id=machine_id)).encode("utf-8")
+WantedBy={target}
+""".format(python=executable, search_path=search_path, machine_id=machine_id, home=home_path, target=target)).encode("utf-8")
 
 
-def activate(artifact, installed, unit, config, machine_id):
+def activate(artifact, installed, unit, config, machine_id, scope="user", home=None):
     service = "gpu-radar-agent-" + validate_machine_id(machine_id) + ".service"
     if unit.name != service:
         raise InstallError("Service path does not match this machine ID.")
     old_files = {path: path.read_bytes() if path.exists() else None for path in (installed, unit)}
-    active = command(["systemctl", "--user", "is-active", "--quiet", service], check=False).returncode == 0
-    enabled = command(["systemctl", "--user", "is-enabled", "--quiet", service], check=False).returncode == 0
+    active = command(["systemctl", "--" + scope, "is-active", "--quiet", service], check=False).returncode == 0
+    enabled = command(["systemctl", "--" + scope, "is-enabled", "--quiet", service], check=False).returncode == 0
     changed = False
     stopped = False
     try:
         if active:
             stopped = True
-            command(["systemctl", "--user", "stop", service])
+            command(["systemctl", "--" + scope, "stop", service])
         # Verify the real device token and actual report before replacing installed files.
         report = command([sys.executable, str(artifact), "run", "--config", str(config), "--once"], check=False)
         if report.returncode:
             raise InstallError("First real report failed (exit {}). Existing installation will be restored; binding is preserved for retry.".format(report.returncode))
         changed = True
         atomic_write(installed, artifact.read_bytes())
-        atomic_write(unit, unit_text(machine_id))
-        command(["systemctl", "--user", "daemon-reload"])
-        command(["systemctl", "--user", "enable", service])
-        command(["systemctl", "--user", "restart", service])
+        atomic_write(unit, unit_text(machine_id, scope, home))
+        command(["systemctl", "--" + scope, "daemon-reload"])
+        command(["systemctl", "--" + scope, "enable", service])
+        command(["systemctl", "--" + scope, "restart", service])
         time.sleep(2)
-        command(["systemctl", "--user", "is-active", "--quiet", service])
-        command(["systemctl", "--user", "is-enabled", "--quiet", service])
+        command(["systemctl", "--" + scope, "is-active", "--quiet", service])
+        command(["systemctl", "--" + scope, "is-enabled", "--quiet", service])
     except BaseException:
         if changed:
-            command(["systemctl", "--user", "stop", service], check=False)
+            command(["systemctl", "--" + scope, "stop", service], check=False)
             if not enabled:
-                command(["systemctl", "--user", "disable", service], check=False)
+                command(["systemctl", "--" + scope, "disable", service], check=False)
             for path, content in old_files.items():
                 if content is None:
                     if path.exists():
                         path.unlink()
                 else:
                     atomic_write(path, content)
-            command(["systemctl", "--user", "daemon-reload"], check=False)
+            command(["systemctl", "--" + scope, "daemon-reload"], check=False)
             if enabled:
-                command(["systemctl", "--user", "enable", service], check=False)
+                command(["systemctl", "--" + scope, "enable", service], check=False)
         if active and (stopped or changed):
-            restored = command(["systemctl", "--user", "start", service], check=False)
+            restored = command(["systemctl", "--" + scope, "start", service], check=False)
             if restored.returncode:
-                print("WARNING: previous service could not restart; inspect systemctl --user status " + service, file=sys.stderr)
+                print("WARNING: previous service could not restart; inspect systemctl --" + scope + " status " + service, file=sys.stderr)
+        raise
+
+
+def system_unit_directory():
+    return Path("/etc/systemd/system")
+
+
+def choose_background(requested, username, paths, home):
+    """Keep existing supervision; only a fresh auto install may fall back."""
+    marker = paths["package"] / "background-mode"
+    safe_file(marker)
+    existing = set()
+    if marker.exists():
+        value = marker.read_text().strip()
+        if value not in {"user", "system", "process"}:
+            raise InstallError("Invalid background-mode marker; existing installation was preserved.")
+        existing.add(value)
+    if paths["unit"].exists() or paths["unit"].is_symlink():
+        existing.add("user")
+    system_unit = system_unit_directory() / paths["service"]
+    if os.geteuid() == 0 and (system_unit.exists() or system_unit.is_symlink()):
+        existing.add("system")
+    if len(existing) > 1:
+        raise InstallError("Multiple background modes exist for this host; resolve them before installing to avoid duplicate collectors.")
+    if existing:
+        mode = next(iter(existing))
+        if requested == "process" and mode != "process" or requested == "systemd" and mode == "process":
+            raise InstallError("Existing background mode is {}. Automatic migration is refused; stop and remove the old installation before changing modes.".format(mode))
+    else:
+        mode = "process" if requested == "process" else "system" if os.geteuid() == 0 else "user"
+    if mode != "process":
+        try:
+            systemd_preflight(username, scope=mode)
+        except (InstallError, OSError, subprocess.SubprocessError) as error:
+            if requested != "auto" or existing:
+                raise
+            print("System service unavailable; using a detached background process.")
+            print("Automatic startup after host/container restart is NOT configured.")
+            mode = "process"
+    return mode
+
+
+def process_running(artifact, config):
+    status = command([sys.executable, str(artifact), "background", "status", "--config", str(config)], check=False)
+    if status.returncode not in {0, 3}:
+        raise InstallError("Cannot verify the existing background process; installation was preserved.")
+    return status.returncode == 0
+
+
+def activate_process(artifact, installed, config):
+    previous = installed.read_bytes() if installed.exists() else None
+    active = process_running(artifact, config)
+    stopped = changed = False
+    try:
+        if active:
+            command([sys.executable, str(artifact), "background", "stop", "--config", str(config)])
+            stopped = True
+        report = command([sys.executable, str(artifact), "run", "--config", str(config), "--once"], check=False)
+        if report.returncode:
+            raise InstallError("First real report failed (exit {}). Existing installation will be restored; binding is preserved for retry.".format(report.returncode))
+        atomic_write(installed, artifact.read_bytes())
+        changed = True
+        command([sys.executable, str(installed), "background", "start", "--config", str(config)])
+        if not process_running(installed, config):
+            raise InstallError("The background process exited during startup; inspect its private log.")
+    except BaseException:
+        if changed:
+            # A failed stop must not be followed by replacing the running image.
+            command([sys.executable, str(artifact), "background", "stop", "--config", str(config)])
+            if previous is None:
+                installed.unlink()
+            else:
+                atomic_write(installed, previous)
+        if active and stopped and previous is not None:
+            restarted = command([sys.executable, str(installed), "background", "start", "--config", str(config)], check=False)
+            if restarted.returncode:
+                print("WARNING: previous background process could not restart; inspect its private log.", file=sys.stderr)
         raise
 
 
@@ -427,6 +516,8 @@ def parser():
     result.add_argument("--username", help="GPU Radar App account (prompted for a new binding if omitted)")
     result.add_argument("--name", help="Display name, default short hostname for a new binding")
     result.add_argument("--mirror", choices=["aliyun"], help="Download the same verified agent from Aliyun instead of GitHub Releases")
+    result.add_argument("--background", choices=["auto", "systemd", "process"], default="auto",
+                        help="auto: use systemd when available, otherwise a detached process; process mode needs manual restart after reboot")
     result.add_argument("--check", action="store_true", help="Check real GPU collection and HTTPS only; no enrollment or service changes")
     return result
 
@@ -457,7 +548,7 @@ def main(argv=None):
     paths = host_paths(home, machine_id)
     package, config_dir, unit_dir = paths["package"], paths["config_dir"], paths["unit_dir"]
     service = paths["service"]
-    for directory in (package, config_dir, unit_dir):
+    for directory in (package, config_dir):
         safe_directory(home, directory)
     os.chmod(str(package), 0o700)
     os.chmod(str(config_dir), 0o700)
@@ -465,7 +556,8 @@ def main(argv=None):
     config = config_dir / "agent.json"
     unit = paths["unit"]
     lock = package / ".install.lock"
-    for path in (installed, config, unit, lock, Path(str(config) + ".lock")):
+    mode_file = package / "background-mode"
+    for path in (installed, config, unit, lock, mode_file, Path(str(config) + ".lock")):
         safe_file(path)
     fd = os.open(str(lock), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
@@ -478,24 +570,45 @@ def main(argv=None):
             download(artifact, mirror=args.mirror)
             preflight(artifact)
             binding = existing_config(config, artifact, args.username, args.name, machine_id)
+            mode = choose_background(args.background, account.pw_name, paths, home)
+            if mode == "system":
+                unit_dir = system_unit_directory()
+                unit = unit_dir / service
+                safe_directory(Path("/"), unit_dir)
+                safe_file(unit)
+            elif mode == "user":
+                safe_directory(home, unit_dir)
             # Check all destinations before obtaining a new remote device binding.
-            for directory in (config_dir, unit_dir):
+            destinations = (config_dir,) if mode == "process" else (config_dir, unit_dir)
+            for directory in destinations:
                 probe_fd, probe_path = tempfile.mkstemp(prefix=".write-check-", dir=str(directory))
                 os.close(probe_fd)
                 os.unlink(probe_path)
-            unit_text(machine_id)
-            username = account.pw_name
-            systemd_preflight(username)
+            if mode != "process":
+                unit_text(machine_id, mode, home)
             if binding is None:
                 enroll(artifact, config, args.username, name, machine_id)
-            activate(artifact, installed, unit, config, machine_id)
-            if not linger_enabled(username):
+            if mode == "process":
+                activate_process(artifact, installed, config)
+            else:
+                activate(artifact, installed, unit, config, machine_id, scope=mode, home=home)
+            if mode == "user" and not linger_enabled(account.pw_name):
                 raise InstallError("Service is running, but Linger is not enabled; reboot persistence could not be confirmed.")
-        print("Installed: reporting every 5 seconds; service active and enabled; Linger=yes.")
-        print("The agent continues after SSH logout and starts after reboot.")
+            atomic_write(mode_file, (mode + "\n").encode("ascii"))
+        if mode == "process":
+            print("Installed: reporting every 5 seconds; detached background process running.")
+            print("The process is detached from SSH. Automatic startup after host/container restart is NOT configured.")
+            prefix = "{} {} background ".format(shlex.quote(sys.executable), shlex.quote(str(installed)))
+            suffix = " --config " + shlex.quote(str(config))
+            for action in ("status", "start", "stop"):
+                print(action.capitalize() + ": " + prefix + action + suffix)
+            print("Logs: " + str(config) + ".background.log")
+        else:
+            print("Installed: reporting every 5 seconds; service active and enabled" + ("; Linger=yes." if mode == "user" else "."))
+            print("The agent continues after SSH logout and starts after reboot.")
+            print("Status: systemctl --{} status {}".format(mode, service))
+            print("Logs:   journalctl {}-u {} -n 30 --no-pager".format("--user " if mode == "user" else "", service))
         print("First report accepted. Allow 5 minutes of continuous samples for color classification.")
-        print("Status: systemctl --user status " + service)
-        print("Logs:   journalctl --user -u " + service + " -n 30 --no-pager")
         return 0
     finally:
         os.close(fd)

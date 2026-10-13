@@ -90,7 +90,7 @@ struct EnrollmentView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("一键安装并登录").font(.headline)
-                        Text("需要 Python 3.6+、正常工作的 NVIDIA 驱动和用户级 systemd。普通用户或 root 均可，安装到实际运行账户的主目录。")
+                        Text("需要 Python 3.6+ 和正常工作的 NVIDIA 驱动。普通用户、root 和 Docker 均可，安装到实际运行账户的主目录。")
                             .font(.callout).foregroundStyle(.secondary)
                         Picker("下载来源", selection: $source) {
                             ForEach(AgentDownloadSource.allCases) { item in
@@ -98,7 +98,7 @@ struct EnrollmentView: View {
                             }
                         }.pickerStyle(.segmented)
                         commandBlock(commands.install(from: source), copyTitle: "复制一键安装命令")
-                        Text("按提示输入当前 App 账户的密码。安装器会完成登录、首次上报与后台启动；退出 SSH 或重启服务器后也会继续采集。")
+                        Text("按提示输入当前 App 账户的密码。安装器会完成登录、首次上报与后台启动，退出 SSH 后继续采集。systemd 模式配置开机启动；Docker 等独立进程模式重启后需手动启动或接入容器启动流程。")
                             .font(.callout).foregroundStyle(.secondary)
                         Text("GitHub 下载不通时，切换为阿里云镜像后重新复制。安装成功后无需再执行下面的登录命令。")
                             .font(.caption).foregroundStyle(.secondary)
