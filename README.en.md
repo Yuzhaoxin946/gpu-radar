@@ -107,15 +107,19 @@ GPU_RADAR_BUILD_WORK="$PWD/.build/macos-build" ./macos/build-app.sh
 open "macos/build/GPU Radar.app"
 ```
 
-If you already cloned the repository, run the last two commands from its root. The output is `macos/build/GPU Radar.app`; drag it into Applications for future use.
+If you already cloned the repository, run the last two commands from its root. Run the resulting `macos/build/GPU Radar.app` directly during development. Quit the app before rebuilding and reopening it, and avoid running an older copy in Applications at the same time. Rebuilding may require signing in again.
 
 The app provides invitation-only registration, login, password changes, and demo mode. Changing a password revokes old app login sessions while enrolled GPU servers keep reporting. The menu bar provides an overview, and the desktop window shows server and GPU details.
+
+The desktop window's Add Server sheet provides a one-click install command for the current account, with GitHub and Aliyun download options. The installer prompts for the account password and starts the background collector. Expand the separate login section for an existing, unbound client; a successful one-click installation does not need another login.
+
+The menu panel is 420 points wide with one row per server. Its height grows up to 10 visible rows, then scrolls vertically. GPU squares that exceed a row's width scroll horizontally and have no click actions. Closing the main window keeps the menu overview updating.
 
 The build script uses ad hoc signing and builds for your current Mac architecture. Developer ID signing and Apple notarization are not provided. The current GitHub Release assets contain the Linux installer and Agent, not a downloadable Mac app installer.
 
 ### Package a DMG
 
-After building the app, maintainers can create a drag-and-drop installer:
+Use the source build above during development; DMG distribution is deferred until the stable release. The packaging script remains available for maintainers after building:
 
 ```bash
 ./macos/package-dmg.sh
