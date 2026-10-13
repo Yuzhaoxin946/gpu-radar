@@ -10,6 +10,22 @@ Each app account manages its own servers. **New account registration requires an
 
 [Download releases](https://github.com/Yuzhaoxin946/gpu-radar/releases/latest) · [Complete Linux installation and maintenance guide](agent/README.en.md) · [Validation scope (Chinese)](docs/validation.md)
 
+## Interface preview
+
+These images use the version 1.0 interface and built-in demo data. All servers, accounts and processes shown are examples. The current app interface is in Chinese; English descriptions are provided below.
+
+### Menu bar: spot an available GPU at a glance
+
+Each server has one row with its name, GPU model and status squares. Green means idle, yellow occupied, red in use, and gray insufficient or stale data. The panel grows with the server list, then scrolls beyond 10 rows.
+
+<img src="docs/images/macos-menu-panel.jpg" alt="GPU Radar menu panel preview showing four servers and green, yellow, red and gray GPU status squares" width="480">
+
+### Desktop dashboard: inspect utilization and memory
+
+Browse server status and filter by GPU model, available memory or GPU count on the same server. Select a GPU square to inspect its five-minute average, current utilization, memory and process information in the detail pane.
+
+![GPU Radar macOS dashboard with server rows, idle GPU totals, filters and A100 GPU details](docs/images/macos-dashboard.jpg)
+
 ## Where to start
 
 1. **Create an account on your Mac**: obtain an invitation from the service operator, open the desktop window, and register with your username, password, and invitation code. If you do not have the app yet, [download the macOS 1.0 installer](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg).

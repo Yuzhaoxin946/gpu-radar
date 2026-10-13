@@ -10,6 +10,22 @@ App 账户各自管理自己的服务器。**新账户注册需要邀请码，�
 
 [下载安装包](https://github.com/Yuzhaoxin946/gpu-radar/releases/latest) · [完整 Linux 安装与维护指南](agent/README.md) · [验证范围](docs/validation.md)
 
+## 界面预览
+
+以下图片使用 1.0 版界面和内置演示数据，服务器、账户和进程均为示例。
+
+### 菜单栏看板：扫一眼，找到空闲卡
+
+每台服务器一行，依次显示服务器名、显卡型号和 GPU 方格。绿色为空闲，黄色为被占用，红色为使用中，灰色为数据不足或失效。面板随服务器数量增高，超过 10 行后滚动。
+
+<img src="docs/images/macos-menu-panel.jpg" alt="GPU Radar 菜单栏面板示意：四台服务器及绿黄红灰 GPU 状态方格" width="480">
+
+### 桌面主窗口：查看负载与显存详情
+
+集中查看服务器状态，按型号、剩余显存和同机卡数筛选；点击 GPU 方格，在右侧查看近 5 分钟平均利用率、当前利用率、显存和进程信息。
+
+![GPU Radar macOS 主窗口截图：服务器列表、空闲卡统计、筛选条件与 A100 GPU 详情](docs/images/macos-dashboard.jpg)
+
 ## 从哪里开始
 
 1. **Mac 上注册账户**：向服务维护者获取邀请码，打开 App，在桌面主窗口填写用户名、密码和邀请码后注册并登录。还没有 App 时，先[下载 macOS 1.0 安装包](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg)。
