@@ -12,7 +12,7 @@ App 账户各自管理自己的服务器。**新账户注册需要邀请码，�
 
 ## 从哪里开始
 
-1. **Mac 上注册账户**：向服务维护者获取邀请码，打开 App，在桌面主窗口填写用户名、密码和邀请码后注册并登录。还没有 App 时，先按下方[构建 macOS App](#构建-macos-app)的步骤构建。
+1. **Mac 上注册账户**：向服务维护者获取邀请码，打开 App，在桌面主窗口填写用户名、密码和邀请码后注册并登录。还没有 App 时，先[下载 macOS 1.0 安装包](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg)。
 2. **每台 GPU 服务器安装 Agent**：正常 SSH 登录服务器后，在交互式终端里运行下方安装命令；登录同一个 App 账户即可加入同一看板。
 3. **回到 Mac 查看**：安装成功后每 5 秒更新一次。首次接入需要积累连续 5 分钟数据，期间 GPU 显示灰色。
 
@@ -90,7 +90,7 @@ tail -n 30 "$agent_config.background.log"
 | 现象 | 处理方式 |
 | --- | --- |
 | 邀请码无效或已用完 | 联系服务维护者获取有效邀请码；每成功创建一个新账户才消耗一个名额，安装 GPU Agent 不消耗名额 |
-| 注册界面没有邀请码输入框 | 更新仓库并重新构建 Mac App；旧版仍可登录已有账户 |
+| 注册界面没有邀请码输入框 | 下载安装最新版 Mac App，或更新仓库并重新构建；旧版仍可登录已有账户 |
 | GitHub 下载超时 | 使用阿里云镜像命令，并保留 `--mirror aliyun` |
 | 提示需要交互式终端 | 先正常 SSH 登录目标 GPU 主机，再粘贴命令，尤其是经跳板机连接时 |
 | Docker 没有 systemd / linger 不可用 | 首次安装默认自动退回独立进程，退出 SSH 后继续运行；重启恢复需手动启动或配置容器启动流程。只有 `--background systemd` 模式要求这些条件 |
@@ -98,6 +98,18 @@ tail -n 30 "$agent_config.background.log"
 | 检测到 legacy 配置 | 保留旧配置和服务，先核实所属主机；不要复制设备凭据到其他服务器或直接删除配置来绕过检查 |
 | GPU 一直显示灰色 | 首次等待连续 5 分钟；之后仍灰色时，查看采集日志、网络和最近上报情况 |
 | 修改 App 密码后是否要重登 Agent？ | 不需要。设备继续使用独立凭据；旧 App 登录会话会失效 |
+
+## 安装 macOS App
+
+[下载 GPU Radar 1.0.0 DMG](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg) · [发行说明及 SHA256SUMS](https://github.com/Yuzhaoxin946/gpu-radar/releases/tag/v1.0.0)
+
+适用于 **Apple Silicon Mac（M 系列芯片）、macOS 13 或更新版本**，无需安装 Xcode、Swift 或源码。目前未提供 Intel 安装包。
+
+1. 打开 DMG，将 `GPU Radar.app` 拖入 `Applications`。
+2. 从“应用程序”打开 App，然后推出安装磁盘。
+3. 使用已有账户登录，或使用邀请码注册。升级时先退出旧 App，再替换应用程序；可能需要重新登录，已绑定服务器不受影响。
+
+此版本包含正式应用图标，使用 ad-hoc 临时签名，**尚无 Developer ID 签名和 Apple 公证**。macOS 可能阻止首次打开；确认下载来源后，可按 [Apple 官方说明](https://support.apple.com/en-ph/102445)在系统“隐私与安全性”中允许打开。无需关闭系统整体安全检查。DMG 不包含自动更新功能。
 
 ## 构建 macOS App
 
@@ -118,11 +130,11 @@ App 提供邀请码注册、登录、修改密码和演示模式。修改密码�
 
 菜单栏看板宽度为 420 点，每台服务器一行。高度随服务器数量增长，最多显示 10 行，超过后纵向滚动；单台服务器超过可见宽度的 GPU 方格可横向滚动，方格不响应点击。关闭主窗口后，菜单栏继续更新。
 
-当前构建脚本使用临时签名，生成当前 Mac 架构的 App；尚未提供 Developer ID 签名或 Apple 公证。GitHub Release 的二进制附件目前仅提供 Linux 安装器与 Agent，不含可直接下载的 Mac 安装包。
+当前构建脚本使用临时签名，生成当前 Mac 架构的 App；尚未提供 Developer ID 签名或 Apple 公证。GitHub v1.0.0 Release 提供 Apple Silicon DMG、Linux 安装器、独立 Agent 和 SHA-256 校验文件。
 
 ### 打包为 DMG
 
-开发阶段使用上方的源码构建方式；DMG 留待正式版分发。保留的打包脚本可供维护者在完成构建后使用：
+维护者可以按上方步骤从源码构建；构建时自动生成并嵌入应用图标，然后执行：
 
 ```bash
 ./macos/package-dmg.sh

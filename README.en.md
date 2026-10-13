@@ -12,7 +12,7 @@ Each app account manages its own servers. **New account registration requires an
 
 ## Where to start
 
-1. **Create an account on your Mac**: obtain an invitation from the service operator, open the desktop window, and register with your username, password, and invitation code. If you do not have the app yet, follow [Build the macOS app](#build-the-macos-app) below.
+1. **Create an account on your Mac**: obtain an invitation from the service operator, open the desktop window, and register with your username, password, and invitation code. If you do not have the app yet, [download the macOS 1.0 installer](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg).
 2. **Install an Agent on each GPU server**: SSH into the server normally, then run the installation command below in its interactive terminal. Use the same app account to add servers to one dashboard.
 3. **Check your Mac dashboard**: after installation, reports arrive every 5 seconds. New GPUs appear gray until 5 minutes of continuous samples have accumulated.
 
@@ -99,6 +99,18 @@ See the [Linux Agent guide](agent/README.en.md) for stopping collection, uninsta
 | GPUs stay gray | Allow 5 continuous minutes initially. If they remain gray, inspect collection logs, the network, and recent reports |
 | Must Agents sign in again after an app password change? | No. Devices keep their independent credentials; previous app login sessions are revoked |
 
+## Install the macOS app
+
+[Download GPU Radar 1.0.0 DMG](https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v1.0.0/GPU-Radar-1.0.0-macOS-arm64.dmg) · [Release notes and SHA256SUMS](https://github.com/Yuzhaoxin946/gpu-radar/releases/tag/v1.0.0)
+
+Requires **an Apple Silicon Mac (M-series), macOS 13 or later**. Xcode, Swift, and source code are not needed. An Intel installer is not currently provided.
+
+1. Open the DMG and drag `GPU Radar.app` into `Applications`.
+2. Launch the app from Applications, then eject the installation disk.
+3. Sign in with an existing account, or register with an invitation. Quit the old app before replacing it during an upgrade. You may need to sign in again; enrolled servers keep their bindings.
+
+This release includes the application icon and uses an ad-hoc signature, **without Developer ID signing or Apple notarization**. macOS may block the first launch. After verifying the download source, follow [Apple’s instructions](https://support.apple.com/en-ph/102445) to allow it in Privacy & Security. There is no need to disable system-wide security checks. The DMG does not provide automatic updates.
+
 ## Build the macOS app
 
 Requires macOS 13+, full Xcode, and Swift 5.9+. Run on your **Mac**:
@@ -118,11 +130,11 @@ The desktop window's Add Server sheet provides a one-click install command for t
 
 The menu panel is 420 points wide with one row per server. Its height grows up to 10 visible rows, then scrolls vertically. GPU squares that exceed a row's width scroll horizontally and have no click actions. Closing the main window keeps the menu overview updating.
 
-The build script uses ad hoc signing and builds for your current Mac architecture. Developer ID signing and Apple notarization are not provided. The current GitHub Release assets contain the Linux installer and Agent, not a downloadable Mac app installer.
+The build script uses ad hoc signing and builds for your current Mac architecture. Developer ID signing and Apple notarization are not provided. The GitHub v1.0.0 Release includes an Apple Silicon DMG, the Linux installer, the standalone Agent, and SHA-256 checksums.
 
 ### Package a DMG
 
-Use the source build above during development; DMG distribution is deferred until the stable release. The packaging script remains available for maintainers after building:
+Maintainers can build from source as above. The build generates and embeds the application icon automatically. Then run:
 
 ```bash
 ./macos/package-dmg.sh
