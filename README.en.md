@@ -113,6 +113,18 @@ The app provides invitation-only registration, login, password changes, and demo
 
 The build script uses ad hoc signing and builds for your current Mac architecture. Developer ID signing and Apple notarization are not provided. The current GitHub Release assets contain the Linux installer and Agent, not a downloadable Mac app installer.
 
+### Package a DMG
+
+After building the app, maintainers can create a drag-and-drop installer:
+
+```bash
+./macos/package-dmg.sh
+```
+
+The output is `macos/build/GPU-Radar-<version>-macOS-<architecture>.dmg`. Recipients do not need Xcode, Swift, or source code: open the DMG, drag `GPU Radar.app` onto its `Applications` folder, then launch it from Applications. macOS 13 or later is required; choose the architecture matching the Mac processor. `arm64` is for Apple Silicon.
+
+The packaging script preserves the existing app signature; it does not perform Developer ID signing or Apple notarization. Gatekeeper may block the current ad hoc build. Complete [signing and notarization](https://developer.apple.com/macos/distribution/) before general public distribution. A DMG provides installation, not automatic updates. For a manual update, quit the app and replace the previous copy in Applications.
+
 ## Status colors
 
 | Color | Status | Rule |

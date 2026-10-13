@@ -113,6 +113,18 @@ App 提供邀请码注册、登录、修改密码和演示模式。修改密码�
 
 当前构建脚本使用临时签名，生成当前 Mac 架构的 App；尚未提供 Developer ID 签名或 Apple 公证。GitHub Release 的二进制附件目前仅提供 Linux 安装器与 Agent，不含可直接下载的 Mac 安装包。
 
+### 打包为 DMG
+
+维护者完成构建后，可直接生成拖拽安装包：
+
+```bash
+./macos/package-dmg.sh
+```
+
+输出位于 `macos/build/GPU-Radar-<版本>-macOS-<架构>.dmg`。收到 DMG 的用户无需 Xcode、Swift 或源码：打开 DMG，将 `GPU Radar.app` 拖到其中的 `Applications` 文件夹，再从“应用程序”启动。需要 macOS 13 或更新版本，并选择与 Mac 处理器匹配的架构；`arm64` 用于 Apple Silicon。
+
+打包脚本保留 App 原有签名，不会自动完成 Developer ID 签名或 Apple 公证。当前临时签名版本可能被 Gatekeeper 拦截，正式面向公众分发前应完成[签名与公证](https://developer.apple.com/macos/distribution/)。DMG 只负责安装，不提供自动更新；手动更新时先退出 App，再用新版替换“应用程序”中的旧版。
+
 ## 颜色含义
 
 | 颜色 | 状态 | 判断条件 |
