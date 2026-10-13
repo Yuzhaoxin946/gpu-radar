@@ -160,8 +160,13 @@ final class RadarStore: ObservableObject {
 
     func select(_ gpu: GPU, server: GPUServer) { selection = (server.id, gpu.uuid) }
 
-    func login(password: String, register: Bool) async -> Bool {
+    func login(password: String, register: Bool, inviteCode: String = "") async -> Bool {
         guard !isAuthenticating else { return false }
+        let normalizedInviteCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if register, !(1...128).contains(normalizedInviteCode.count) {
+            errorMessage = "请输入有效的邀请码（最多 128 个字符）。"
+            return false
+        }
         generation = UUID()
         let loginGeneration = generation
         isAuthenticating = true
@@ -170,7 +175,12 @@ final class RadarStore: ObservableObject {
         do {
             let url = API.baseURL
             let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
-            let body = try JSONEncoder().encode(Credentials(username: user, password: password))
+            let body: Data
+            if register {
+                body = try JSONEncoder().encode(RegistrationCredentials(username: user, password: password, inviteCode: normalizedInviteCode))
+            } else {
+                body = try JSONEncoder().encode(Credentials(username: user, password: password))
+            }
             let data = try await API.request(path: register ? "/auth/register" : "/auth/login", method: "POST", body: body)
             guard generation == loginGeneration else { return false }
             let response = try API.decoder.decode(LoginResponse.self, from: data)

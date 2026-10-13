@@ -6,19 +6,19 @@
 
 GPU Radar 由 Linux 采集客户端、中心 API 和原生 macOS App 组成。每台服务器在菜单栏占一行：服务器名、显卡型号、每张 GPU 对应的颜色方格。方格不响应点击；利用率、显存和进程详情在桌面主窗口查看。
 
-App 账户各自管理自己的服务器。服务器首次安装时登录 App 账户，之后使用独立设备凭据持续上报，不保存账户密码。
+App 账户各自管理自己的服务器。**新账户注册需要邀请码，请向服务维护者私下获取。** 邀请码只用于创建新账户；已有账户登录、修改密码和安装 Agent 均不需要邀请码。服务器首次安装时登录 App 账户，之后使用独立设备凭据持续上报，不保存账户密码。
 
 [下载安装包](https://github.com/Yuzhaoxin946/gpu-radar/releases/latest) · [完整 Linux 安装与维护指南](agent/README.md) · [验证范围](docs/validation.md)
 
 ## 从哪里开始
 
-1. **Mac 上注册账户**：打开 App，在桌面主窗口注册并登录。还没有 App 时，先按下方[构建 macOS App](#构建-macos-app)的步骤构建。
+1. **Mac 上注册账户**：向服务维护者获取邀请码，打开 App，在桌面主窗口填写用户名、密码和邀请码后注册并登录。还没有 App 时，先按下方[构建 macOS App](#构建-macos-app)的步骤构建。
 2. **每台 GPU 服务器安装 Agent**：正常 SSH 登录服务器后，在交互式终端里运行下方安装命令；登录同一个 App 账户即可加入同一看板。
 3. **回到 Mac 查看**：安装成功后每 5 秒更新一次。首次接入需要积累连续 5 分钟数据，期间 GPU 显示灰色。
 
 ## 安装 Linux 客户端
 
-先在 Mac App 注册账户，然后以日常 SSH 用户登录 GPU 服务器，运行：
+先在最新版 Mac App 中使用邀请码注册账户，然后以日常 SSH 用户登录 GPU 服务器，运行（已有账户直接安装即可）：
 
 ```bash
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account
@@ -86,6 +86,8 @@ loginctl show-user "$(id -un)" -p Linger
 
 | 现象 | 处理方式 |
 | --- | --- |
+| 邀请码无效或已用完 | 联系服务维护者获取有效邀请码；每成功创建一个新账户才消耗一个名额，安装 GPU Agent 不消耗名额 |
+| 注册界面没有邀请码输入框 | 更新仓库并重新构建 Mac App；旧版仍可登录已有账户 |
 | GitHub 下载超时 | 使用阿里云镜像命令，并保留 `--mirror aliyun` |
 | 提示需要交互式终端 | 先正常 SSH 登录目标 GPU 主机，再粘贴命令，尤其是经跳板机连接时 |
 | linger 或用户服务不可用 | 按安装器提示请管理员协助，然后重新 SSH 登录并重试；成功前不能认为已配置开机运行 |
@@ -107,7 +109,7 @@ open "macos/build/GPU Radar.app"
 
 已经克隆仓库时，从项目根目录执行后两条命令即可。输出为 `macos/build/GPU Radar.app`，可以将它拖入“应用程序”目录，方便以后打开。
 
-App 提供注册、登录、修改密码和演示模式。修改密码会撤销旧的 App 登录会话，已绑定 GPU 服务器继续上报。菜单栏只做概览，桌面主窗口提供服务器和 GPU 详情。
+App 提供邀请码注册、登录、修改密码和演示模式。修改密码会撤销旧的 App 登录会话，已绑定 GPU 服务器继续上报。菜单栏只做概览，桌面主窗口提供服务器和 GPU 详情。
 
 当前构建脚本使用临时签名，生成当前 Mac 架构的 App；尚未提供 Developer ID 签名或 Apple 公证。GitHub Release 的二进制附件目前仅提供 Linux 安装器与 Agent，不含可直接下载的 Mac 安装包。
 
@@ -152,7 +154,7 @@ App 提供注册、登录、修改密码和演示模式。修改密码会撤销�
 .venv/bin/gpu-radar-agent --config .local/demo-agent.json run --simulate
 ```
 
-请先通过本地 API 创建测试账户。`--simulate` 会明确标记模拟数据；真实采集失败不会自动切换到模拟模式。
+请先按照 [服务端账户管理说明](server/README.md#invitation-only-registration)创建本地邀请码，再通过本地 API 注册测试账户；也可以用管理员命令直接创建测试账户。`--simulate` 会明确标记模拟数据；真实采集失败不会自动切换到模拟模式。
 
 ```bash
 ./scripts/test.sh

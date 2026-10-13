@@ -8,7 +8,7 @@ Run one Agent on each GPU server to monitor multiple servers from the Mac app. S
 
 - A Linux GPU server with a working NVIDIA driver. The current SSH user must be able to run `nvidia-smi` and see the GPUs.
 - `bash`, `curl`, **Python 3.6+**, and a working systemd user manager. The installer uses a standalone `.pyz`; it needs no pip packages and does not change system Python.
-- An account registered in the macOS app. Your app account is separate from your Linux/SSH account. Other users' training contributes to GPU metrics without requiring those users to register app accounts.
+- An account registered in the latest macOS app using an invitation obtained privately from the service operator. Invitations are only used when creating new accounts; existing account login and Agent installation do not need one or consume a use. Your app account is separate from your Linux/SSH account. Other users' training contributes to GPU metrics without requiring those users to register app accounts.
 - Outbound HTTPS access to `https://123.56.135.166` and GitHub Release downloads. Use the Aliyun mirror below if GitHub is unreachable. **No new inbound port is needed on the GPU server.**
 
 Open an interactive terminal as your normal SSH user, then run the command on the GPU server. Do not prefix the installer with `sudo` or put your app password in a command. Remote command execution through a gateway such as JumpServer may lack `/dev/tty`; log in to the target server's terminal normally before pasting the command. For direct SSH, `ssh -t your-gpu-host` requests a terminal.
@@ -202,7 +202,7 @@ python3 -m venv "$HOME/.local/share/gpu-radar/venv"
 "$HOME/.local/share/gpu-radar/venv/bin/gpu-radar-agent" run
 ```
 
-Register an account in the Mac app first; a backend administrator may disable public registration. After login, the Agent revokes its temporary account session and saves the device configuration to `~/.config/gpu-radar/agent.json` with mode 0600. Commands using a configuration accept `--config /path/agent.json` before or after the subcommand. The configuration must belong to the Linux user running the Agent.
+Register an account in the latest Mac app with an invitation first; a backend administrator may also disable all registration. Obtain invitations privately from the service operator. Only successfully creating a new account consumes a use; Agent login and device enrollment do not require an invitation. After login, the Agent revokes its temporary account session and saves the device configuration to `~/.config/gpu-radar/agent.json` with mode 0600. Commands using a configuration accept `--config /path/agent.json` before or after the subcommand. The configuration must belong to the Linux user running the Agent.
 
 ### Manual systemd user service
 

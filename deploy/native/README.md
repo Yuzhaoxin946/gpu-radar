@@ -14,7 +14,7 @@
 | 服务用户与组 | `gpu-radar` |
 | API 上游 | `127.0.0.1:18760` |
 
-源码及 venv 由 root 所有；服务用户只写状态目录，目录权限 0700。源码必须让服务用户可读，且该用户不应拥有登录 shell。将 `gpu-radar.env.example` 复制到环境文件路径，`REGISTRATION_ENABLED=true` 支持桌面注册。安装依赖后，安装并验证 unit：
+源码及 venv 由 root 所有；服务用户只写状态目录，目录权限 0700。源码必须让服务用户可读，且该用户不应拥有登录 shell。将 `gpu-radar.env.example` 复制到环境文件路径，`REGISTRATION_ENABLED=true` 允许凭有效邀请码在桌面注册；`false` 则完全关闭自助注册，即使邀请码有效也不能注册。安装依赖后，安装并验证 unit：
 
 ```bash
 /opt/gpu-radar/venv/bin/python -m pip install -r /opt/gpu-radar/current/server/requirements.txt
@@ -42,9 +42,21 @@ proxy_set_header X-Forwarded-Proto $scheme;
 
 安全组仅开放实际 HTTPS 入口。API 的 18760 与数据库无需入站规则。域名或公网 IP 证书及其自动续签需由主机证书服务配置；App 与 Agent 必须能验证该证书。HTTP 80 保持证书验证路径可访问，不在公网 HTTP 上提供密码登录。
 
-## 创建账户
+## 邀请码与账户管理
 
-桌面 App 提供注册与修改密码入口。也可以用下面的管理员命令创建账户，两次交互输入密码，不将密码放入 shell 历史或进程参数。若调整了数据库路径，也要同步此处的 `DATABASE_URL`。
+从 `server/` 目录使用服务端相同的数据库创建邀请码。例如允许五个新账户：
+
+```bash
+cd /opt/gpu-radar/current/server
+runuser -u gpu-radar -- env DATABASE_URL=sqlite:////var/lib/gpu-radar/radar.db PYTHONDONTWRITEBYTECODE=1 \
+  /opt/gpu-radar/venv/bin/python -m app.manage create-invite --max-uses 5
+```
+
+按提示输入邀请码，输入不回显。邀请码由 8–128 个 ASCII 字母、数字、`_` 或 `-` 组成，区分大小写，忽略首尾空白；数据库只存哈希。相同邀请码和相同额度重复执行不会重置已用名额，不同额度会被拒绝。本版邀请码没有自动过期；关闭全部自助注册可设置 `REGISTRATION_ENABLED=false` 并重启服务。不要将真实邀请码放入命令参数、公开源码或发行说明；可信自动化可以使用 `--code-stdin` 从标准输入提供。
+
+### 直接创建账户
+
+桌面 App 提供邀请码注册与修改密码入口。邀请码由维护者私下分发；每成功创建一个新账户才消耗一个名额，注册失败不消耗，名额计数保存在数据库中。已有账户登录、密码修改和 Agent 绑定、上报不受影响。也可以用下面的管理员命令直接创建账户（无需邀请码），两次交互输入密码，不将密码放入 shell 历史或进程参数。若调整了数据库路径，也要同步此处的 `DATABASE_URL`。
 
 ```bash
 cd /opt/gpu-radar/current/server
@@ -74,7 +86,7 @@ systemctl start gpu-radar-backup.service
 systemctl list-timers gpu-radar-backup.timer --no-pager
 ```
 
-备份含账户哈希、设备凭据哈希和监控数据，应安全同步到另一台主机，并按磁盘空间制定保留策略。不要运行中只复制 `.db` 而遗漏 WAL。恢复备份时先停服务，再替换数据库并移除属于旧数据库的 WAL/SHM，恢复正确所有权后再启动。
+备份含账户哈希、设备凭据哈希、邀请码哈希和使用计数及监控数据，应安全同步到另一台主机，并按磁盘空间制定保留策略。不要运行中只复制 `.db` 而遗漏 WAL。恢复备份时先停服务，再替换数据库并移除属于旧数据库的 WAL/SHM，恢复正确所有权后再启动。
 
 ```bash
 systemctl status gpu-radar --no-pager
@@ -82,4 +94,4 @@ journalctl -u gpu-radar --since '10 minutes ago' --no-pager
 journalctl -u gpu-radar-backup.service --since yesterday --no-pager
 ```
 
-升级前备份数据库并保留当前发布目录。未来数据库结构变更需要迁移步骤；切换代码目录本身不会完成迁移。暂停服务用 `systemctl stop gpu-radar`，保留数据库。
+升级前备份数据库并保留当前发布目录。本次邀请码功能在启动时自动创建独立的 `invitations` 表，保留已有账户与设备；未创建任何邀请码时不会开放自助注册。后续修改既有表结构时仍需要单独迁移步骤。暂停服务用 `systemctl stop gpu-radar`，保留数据库。

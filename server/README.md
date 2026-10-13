@@ -13,14 +13,14 @@ python -m pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Local registration is enabled by default. Interactive API docs are at `http://127.0.0.1:8000/docs`; `GET /api/v1/health` returns `status: "ok"` and `server_time`, the current UTC server time as an ISO-8601 string ending in `Z`. Agents can use this time to calibrate report timestamps without changing their host clock. The report endpoint still rejects samples more than 30 seconds in the future. SQLite creates `gpu-radar.db` in the working directory and preserves account/device state and the latest snapshot across restarts.
+The registration endpoint is enabled by default, but every new account requires a valid invitation, including local development. An installation with no invitations cannot accept self-service registrations. Interactive API docs are at `http://127.0.0.1:8000/docs`; `GET /api/v1/health` returns `status: "ok"` and `server_time`, the current UTC server time as an ISO-8601 string ending in `Z`. Agents can use this time to calibrate report timestamps without changing their host clock. The report endpoint still rejects samples more than 30 seconds in the future. SQLite creates `gpu-radar.db` in the working directory and preserves account/device state and the latest snapshot across restarts.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./gpu-radar.db` | SQLite URL or `postgresql+psycopg://user:password@db:5432/gpu_radar` |
-| `REGISTRATION_ENABLED` | `true` | Enable account registration; use `false` for an invitation-only deployment |
+| `REGISTRATION_ENABLED` | `true` | Allow invitation-only registration; `false` disables all self-service registration, including with a valid invitation |
 | `SESSION_TTL_DAYS` | `30` | Account login expiry; device credentials are independently revocable |
 | `STALE_AFTER_SECONDS` | `30` | Data older than this is gray, including stale agent timestamps |
 
@@ -28,7 +28,19 @@ The utilization window is fixed at 300 seconds in production (`Settings.utilizat
 
 Use one Uvicorn worker: the basic login limiter is local to the process. Terminate HTTPS at a trusted reverse proxy for deployment; configure forwarded headers only for that proxy. Do not expose a plaintext password login on the public internet. PostgreSQL credentials belong in the deployment environment, not source control.
 
-When registration is disabled, create the first account interactively using the same `DATABASE_URL` as the API:
+## Invitation-only registration
+
+New accounts require an invitation issued privately by the operator. Each invitation has a total account-creation limit, and only a successful account creation consumes one use. Invalid requests and duplicate usernames do not consume uses. The use counter and new account are committed atomically, preventing concurrent registration from exceeding the limit; counters persist in the database across restarts. Existing login sessions, password changes, and Agent enrollment/reporting are unaffected. Invitations are not stored in client builds or public source.
+
+To create an invitation allowing five new accounts, run this from `server/` with the same `DATABASE_URL` as the API:
+
+```sh
+python -m app.manage create-invite --max-uses 5
+```
+
+The code is prompted without echo; send it privately to intended users. Invitation codes use 8–128 ASCII letters, digits, `_`, or `-`. They are case-sensitive after trimming surrounding whitespace, and the database stores only their hashes. Repeating this command with the same code and limit preserves the existing use count; a different limit is refused, so rerunning deployment does not replenish an invitation. `--code-stdin` is available for trusted automation without putting the code in command arguments. Never commit an actual invitation or include it in public release notes. Codes do not expire automatically in this version.
+
+An administrator can also create the first account directly without an invitation, using the same `DATABASE_URL` as the API:
 
 ```sh
 python -m app.manage create-user researcher
@@ -66,4 +78,4 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-Tests exercise account isolation, token scope/expiry/revocation, password rotation and concurrent authentication, persistent hash storage, weighted irregular sampling and exact boundaries, history persistence/caps, stale/error handling, GPU identity, unknown telemetry, replay/out-of-order reports, limits, throttling, disabled registration and administrator bootstrap. PostgreSQL schema compilation is checked without requiring a live database; a live PostgreSQL deployment is a separate integration check.
+Tests exercise account isolation, token scope/expiry/revocation, password rotation and concurrent authentication, persistent hash storage, weighted irregular sampling and exact boundaries, history persistence/caps, stale/error handling, GPU identity, unknown telemetry, replay/out-of-order reports, limits, throttling, disabled registration, invitation limits and concurrent redemption, failed-registration rollback, persistence across restarts, and administrator bootstrap. PostgreSQL schema compilation is checked without requiring a live database; a live PostgreSQL deployment is a separate integration check.

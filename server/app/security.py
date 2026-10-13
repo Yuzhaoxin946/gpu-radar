@@ -38,6 +38,10 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def invitation_hash(code: str) -> str:
+    return hashlib.sha256(("gpu-radar-invite-v1:" + code.strip()).encode()).hexdigest()
+
+
 def issue_token(prefix: str) -> tuple[str, str]:
     token = prefix + secrets.token_urlsafe(32)
     return token, token_hash(token)

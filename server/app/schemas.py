@@ -21,8 +21,19 @@ class Login(Payload):
         return value.lower()
 
 
-class Registration(Login):
+class AccountCreation(Login):
     password: str = Field(min_length=10, max_length=128)
+
+
+class Registration(AccountCreation):
+    # Omission reaches the same invitation gate as an invalid code, including on
+    # older clients. AccountCreation separately supports administrator bootstrap.
+    invite_code: str | None = Field(default=None, max_length=128, repr=False)
+
+    @field_validator("invite_code")
+    @classmethod
+    def clean_invitation(cls, value):
+        return value.strip() if value is not None else None
 
 
 class PasswordChange(Payload):

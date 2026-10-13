@@ -21,6 +21,19 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(object, ["current_password": "old-example", "new_password": "new-example"])
     }
 
+    func testRegistrationIncludesTrimmedInvitationUsingAPIFieldName() throws {
+        let body = try JSONEncoder().encode(RegistrationCredentials(username: "test-researcher", password: "example-password", inviteCode: "  example-invitation\n"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(object, ["username": "test-researcher", "password": "example-password", "invite_code": "example-invitation"])
+    }
+
+    func testLoginPayloadHasNoInvitationField() throws {
+        let body = try JSONEncoder().encode(Credentials(username: "test-researcher", password: "example-password"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(object, ["username": "test-researcher", "password": "example-password"])
+        XCTAssertNil(object["invite_code"])
+    }
+
     func testOnlyBuiltInServerCanRestoreSavedSession() {
         XCTAssertEqual(API.baseURL, "https://123.56.135.166")
         XCTAssertTrue(API.isBuiltInServer("https://123.56.135.166"))

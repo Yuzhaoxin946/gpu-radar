@@ -8,7 +8,7 @@
 
 - Linux GPU 服务器，有正常工作的 NVIDIA 驱动，当前 SSH 用户执行 `nvidia-smi` 能看到显卡。
 - `bash`、`curl`、**Python 3.6+**，以及可用的用户级 systemd。安装器使用独立 `.pyz`，不需要 pip，不修改系统 Python。
-- 在 macOS App 中注册账户。App 账户与 Linux/SSH 账户是两回事；一台服务器上其他人的训练也会计入 GPU 指标，不要求他们注册 App。
+- 向服务维护者私下获取邀请码，在最新版 macOS App 中注册账户。邀请码只用于创建新账户；已有账户登录和安装 Agent 不需要，也不会消耗邀请码名额。App 账户与 Linux/SSH 账户是两回事；一台服务器上其他人的训练也会计入 GPU 指标，不要求他们注册 App。
 - 能通过 HTTPS 出站访问 `https://123.56.135.166`，以及 GitHub Release 下载地址；GitHub 不通时用下方阿里云镜像。**GPU 服务器不需要新增入站端口。**
 
 使用日常 SSH 用户打开交互式终端，再在服务器上执行命令。不要给安装命令加 `sudo`，也不要把 App 密码写进命令行。通过 JumpServer 等跳板机时，远程执行模式可能没有 `/dev/tty`；请先正常登录目标服务器的终端，再粘贴安装命令。直接 SSH 可用 `ssh -t your-gpu-host` 请求终端。
@@ -202,7 +202,7 @@ python3 -m venv "$HOME/.local/share/gpu-radar/venv"
 "$HOME/.local/share/gpu-radar/venv/bin/gpu-radar-agent" run
 ```
 
-账户先在 Mac App 注册，服务端也可以关闭公开注册。登录完成后撤销临时账户会话，设备配置默认保存在 `~/.config/gpu-radar/agent.json`（0600）。所有使用配置的子命令都可以在子命令前后指定 `--config /path/agent.json`。配置与运行 Agent 的 Linux 用户必须一致。
+账户先在最新版 Mac App 中使用邀请码注册，服务端也可以完全关闭注册。邀请码由服务维护者私下提供，仅成功创建新账户时消耗名额；Agent 登录与设备绑定不需要邀请码。登录完成后撤销临时账户会话，设备配置默认保存在 `~/.config/gpu-radar/agent.json`（0600）。所有使用配置的子命令都可以在子命令前后指定 `--config /path/agent.json`。配置与运行 Agent 的 Linux 用户必须一致。
 
 ### 手动用户级 systemd
 

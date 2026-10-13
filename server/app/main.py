@@ -13,9 +13,9 @@ from sqlalchemy.orm.exc import StaleDataError
 from .classification import next_gpu_snapshot, server_view
 from .config import Settings
 from .database import Base, database
-from .models import Account, AccountSession, Server
+from .models import Account, AccountSession, Invitation, Server
 from .schemas import Enrollment, Login, PasswordChange, Registration, Report
-from .security import LoginFailureLimiter, LoginLimiter, hash_password, issue_token, timestamp, token_hash, utc, verify_password
+from .security import LoginFailureLimiter, LoginLimiter, hash_password, invitation_hash, issue_token, timestamp, token_hash, utc, verify_password
 
 bearer = HTTPBearer(auto_error=False)
 # Match password-hashing work for unknown accounts without storing any usable credential.
@@ -100,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         engine.dispose()
 
-    app = FastAPI(title="GPU Radar", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="GPU Radar", version="0.3.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -156,14 +156,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.registration_enabled:
             raise HTTPException(403, "Account registration is disabled")
         attempt(request, app.state.registration_limiter)
-        account = Account(username=payload.username, password_hash=hash_password(payload.password), created_at=app.state.clock())
-        db.add(account)
+        if not payload.invite_code:
+            raise HTTPException(403, "Invitation code is invalid or fully used")
+        # A conditional UPDATE reserves a use and takes a write lock on SQLite
+        # as well as PostgreSQL. Keep it in the account/session transaction:
+        # failed registration never consumes a use, even under concurrency.
+        reserved = db.execute(update(Invitation).where(
+            Invitation.code_hash == invitation_hash(payload.invite_code),
+            Invitation.used_count < Invitation.max_uses,
+        ).values(used_count=Invitation.used_count + 1))
+        if reserved.rowcount != 1:
+            db.rollback()
+            raise HTTPException(403, "Invitation code is invalid or fully used")
         try:
+            if db.scalar(select(Account.id).where(Account.username == payload.username)) is not None:
+                raise HTTPException(409, "Username is already registered")
+            # Reject missing, invalid and exhausted invitations before scrypt.
+            account = Account(username=payload.username, password_hash=hash_password(payload.password), created_at=app.state.clock())
+            db.add(account)
             db.flush()
+            return issue_session(account, db)
         except IntegrityError:
             db.rollback()
             raise HTTPException(409, "Username is already registered") from None
-        return issue_session(account, db)
+        except Exception:
+            db.rollback()
+            raise
 
     @app.post("/api/v1/auth/login")
     def login(payload: Login, request: Request, db: DB):

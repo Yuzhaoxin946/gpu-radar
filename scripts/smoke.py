@@ -50,6 +50,9 @@ def main() -> None:
                "DATABASE_URL": f"sqlite:///{scratch_path / 'smoke.db'}",
                "REGISTRATION_ENABLED": "true",
                "STALE_AFTER_SECONDS": "3"}
+        invitation = secrets.token_urlsafe(24)
+        subprocess.run([sys.executable, "-m", "app.manage", "create-invite", "--max-uses", "2", "--code-stdin"],
+                       input=invitation, text=True, capture_output=True, check=True, cwd=ROOT / "server", env=env)
         with (scratch_path / "server.log").open("w+") as log:
             process = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "smoke_app:app", "--host", "127.0.0.1", "--port", str(port)],
@@ -68,8 +71,8 @@ def main() -> None:
                         time.sleep(0.1)
                 client = Client(base)
                 password = secrets.token_urlsafe(24)
-                alice = client.request("POST", "/auth/register", {"username": "smoke-alice", "password": password})
-                bob = client.request("POST", "/auth/register", {"username": "smoke-bob", "password": secrets.token_urlsafe(24)})
+                alice = client.request("POST", "/auth/register", {"username": "smoke-alice", "password": password, "invite_code": invitation})
+                bob = client.request("POST", "/auth/register", {"username": "smoke-bob", "password": secrets.token_urlsafe(24), "invite_code": invitation})
                 config_path = scratch_path / "agent.json"
                 with patch("getpass.getpass", return_value=password):
                     check(agent_main(["--config", str(config_path), "login", "--server", base,

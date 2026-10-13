@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -16,6 +16,18 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     username: Mapped[str] = mapped_column(String(48), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Invitation(Base):
+    __tablename__ = "invitations"
+    __table_args__ = (
+        CheckConstraint("max_uses > 0", name="invitation_positive_limit"),
+        CheckConstraint("used_count >= 0 AND used_count <= max_uses", name="invitation_usage_limit"),
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False)
+    used_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

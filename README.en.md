@@ -6,19 +6,19 @@ Check GPU availability across multiple Linux servers from your Mac menu bar.
 
 GPU Radar consists of a Linux collector, a central API, and a native macOS app. Each server gets one menu row: its name, GPU model, and one colored square per GPU. The squares display status without click actions; the desktop window shows utilization, memory, and process details.
 
-Each app account manages its own servers. An Agent signs in to the app account during installation, then uses an independent device credential for subsequent reports. It does not store the account password.
+Each app account manages its own servers. **New account registration requires an invitation code; ask the service operator privately for one.** Invitations are needed only to create new accounts. Existing account login, password changes, and Agent installation do not need one. An Agent signs in to the app account during installation, then uses an independent device credential for subsequent reports. It does not store the account password.
 
 [Download releases](https://github.com/Yuzhaoxin946/gpu-radar/releases/latest) · [Complete Linux installation and maintenance guide](agent/README.en.md) · [Validation scope (Chinese)](docs/validation.md)
 
 ## Where to start
 
-1. **Create an account on your Mac**: open the desktop window, register, and sign in. If you do not have the app yet, follow [Build the macOS app](#build-the-macos-app) below.
+1. **Create an account on your Mac**: obtain an invitation from the service operator, open the desktop window, and register with your username, password, and invitation code. If you do not have the app yet, follow [Build the macOS app](#build-the-macos-app) below.
 2. **Install an Agent on each GPU server**: SSH into the server normally, then run the installation command below in its interactive terminal. Use the same app account to add servers to one dashboard.
 3. **Check your Mac dashboard**: after installation, reports arrive every 5 seconds. New GPUs appear gray until 5 minutes of continuous samples have accumulated.
 
 ## Install the Linux Agent
 
-First register in the Mac app. Then SSH into the GPU server as your usual Linux user and run:
+First register with an invitation in the latest Mac app. Existing accounts can go straight to installation. SSH into the GPU server as your usual Linux user and run:
 
 ```bash
 curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/install.sh | bash -s -- --username your_account
@@ -86,6 +86,8 @@ See the [Linux Agent guide](agent/README.en.md) for stopping collection, uninsta
 
 | Symptom | What to do |
 | --- | --- |
+| Invitation is invalid or fully used | Ask the service operator for a valid invitation. Only a successfully created account consumes a use; installing GPU Agents does not |
+| No invitation field in the registration form | Update the repository and rebuild the Mac app; older apps can still sign in to existing accounts |
 | GitHub download times out | Use the Aliyun mirror command, including `--mirror aliyun` |
 | An interactive terminal is required | Log in to the target GPU host through a normal SSH shell, then paste the command, especially when using a jump server |
 | Linger or the user service manager is unavailable | Follow the installer's administrator guidance, reconnect through SSH, and retry; startup at boot is not confirmed until installation succeeds |
@@ -107,7 +109,7 @@ open "macos/build/GPU Radar.app"
 
 If you already cloned the repository, run the last two commands from its root. The output is `macos/build/GPU Radar.app`; drag it into Applications for future use.
 
-The app provides registration, login, password changes, and demo mode. Changing a password revokes old app login sessions while enrolled GPU servers keep reporting. The menu bar provides an overview, and the desktop window shows server and GPU details.
+The app provides invitation-only registration, login, password changes, and demo mode. Changing a password revokes old app login sessions while enrolled GPU servers keep reporting. The menu bar provides an overview, and the desktop window shows server and GPU details.
 
 The build script uses ad hoc signing and builds for your current Mac architecture. Developer ID signing and Apple notarization are not provided. The current GitHub Release assets contain the Linux installer and Agent, not a downloadable Mac app installer.
 
@@ -152,7 +154,7 @@ The local API listens on `http://127.0.0.1:8000`, serves API documentation at `/
 .venv/bin/gpu-radar-agent --config .local/demo-agent.json run --simulate
 ```
 
-Create a test account through the local API first. `--simulate` explicitly labels simulated data; real collection failures never trigger an automatic simulation fallback.
+First follow [server account management](server/README.md#invitation-only-registration) to create a local invitation, then register a test account through the local API. Alternatively, create a test account directly with the administrator command. `--simulate` explicitly labels simulated data; real collection failures never trigger an automatic simulation fallback.
 
 ```bash
 ./scripts/test.sh

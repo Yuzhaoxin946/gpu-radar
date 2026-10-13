@@ -88,6 +88,22 @@ struct Account: Codable { let id: String; let username: String }
 struct LoginResponse: Codable { let accessToken: String; let expiresAt: Date; let account: Account }
 struct ServersResponse: Codable { let servers: [GPUServer]; let serverTime: Date? }
 struct Credentials: Encodable { let username: String; let password: String }
+struct RegistrationCredentials: Encodable {
+    let username: String
+    let password: String
+    let inviteCode: String
+
+    init(username: String, password: String, inviteCode: String) {
+        self.username = username
+        self.password = password
+        self.inviteCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case username, password
+        case inviteCode = "invite_code"
+    }
+}
 struct PasswordChangeCredentials: Encodable {
     let currentPassword: String
     let newPassword: String

@@ -4,15 +4,18 @@ All paths use `/api/v1`. JSON uses snake_case. Dates are ISO-8601 UTC strings wi
 
 ## Accounts
 
-- `POST /auth/register` body `{ "username": "researcher", "password": "..." }` creates an account and returns a login response. Account registration may be disabled by deployment configuration.
-- `POST /auth/login` same body returns `{ "access_token": "...", "token_type": "bearer", "expires_at": "...", "account": { "id": "...", "username": "researcher" } }`.
+- `POST /auth/register` body `{ "username": "researcher", "password": "...", "invite_code": "<private invitation>" }` requires a valid invitation, creates an account, and returns a login response. Each successful account creation consumes one invitation use in the same database transaction; failed registration, including a duplicate username, does not consume a use. Invitation limits persist across service restarts. The operator distributes invitations privately; they are not shipped with the app or Agent. `REGISTRATION_ENABLED=false` disables all self-service registration, including with valid invitations.
+
+- `POST /auth/login` body `{ "username": "researcher", "password": "..." }` returns `{ "access_token": "...", "token_type": "bearer", "expires_at": "...", "account": { "id": "...", "username": "researcher" } }`.
 - `GET /auth/me` using an account token returns `{ "id": "...", "username": "researcher" }`.
 - `POST /auth/logout` revokes the current account session and returns 204.
 - `POST /auth/password` using an account token, body `{ "current_password": "...", "new_password": "..." }`, verifies the current password, changes it, revokes all previous account sessions and returns a fresh login response. New passwords contain 10–128 characters. Existing device tokens continue reporting. Register and change-password controls are provided only in the macOS desktop window, not in the menu panel or Agent CLI; the HTTPS API supports those controls.
 
+Invitation codes are case-sensitive after trimming surrounding whitespace, with at most 128 characters. Missing, incorrect, or exhausted invitations return `403` with `detail: "Invitation code is invalid or fully used"`; duplicate usernames return `409` when a valid invitation is available. Invalid fields return `422`, and registration rate limits return `429`. Login, password changes, and Agent enrollment do not accept or consume invitations.
+
 ## Agent enrollment and reporting
 
-- `POST /agents/enroll` using an account token, body `{ "name": "lab-a", "hostname": "gpu-host" }`, returns `{ "server_id": "...", "device_token": "...", "name": "lab-a" }`. A record belongs to exactly one account. Agent signs in interactively, enrolls once, then saves only its device token and server configuration, never the account password or login token. It logs out the transient account session after enrollment.
+- `POST /agents/enroll` using an account token, body `{ "name": "lab-a", "hostname": "gpu-host" }`, returns `{ "server_id": "...", "device_token": "...", "name": "lab-a" }`. A record belongs to exactly one account. Agent enrollment needs no invitation and consumes no invitation uses. Agent signs in interactively, enrolls once, then saves only its device token and server configuration, never the account password or login token. It logs out the transient account session after enrollment.
 - `POST /agent/report` using a device token, body below, returns `{ "accepted": true }`.
 
 ```json

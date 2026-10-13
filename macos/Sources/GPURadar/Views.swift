@@ -20,6 +20,7 @@ struct LoginView: View {
     @EnvironmentObject private var store: RadarStore
     @State private var password = ""
     @State private var passwordConfirmation = ""
+    @State private var inviteCode = ""
     @State private var validationError: String?
     @State private var register = false
     var body: some View {
@@ -46,15 +47,21 @@ struct LoginView: View {
             }
             .padding(40).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(LinearGradient(colors: [Color.green.opacity(0.07), Color.clear], startPoint: .topLeading, endPoint: .bottomTrailing))
-            VStack(alignment: .leading, spacing: 18) {
+            ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
                 Text(register ? "创建你的账户" : "欢迎回来").font(.system(size: 28, weight: .semibold))
-                Text("登录后查看属于你的服务器。")
+                Text(register ? "注册需要邀请码，请向管理员获取。" : "登录后查看属于你的服务器。")
                     .font(.callout).foregroundStyle(.secondary)
                 Picker("账户", selection: $register) {
                     Text("登录").tag(false)
                     Text("注册").tag(true)
                 }.pickerStyle(.segmented).disabled(store.isAuthenticating)
-                    .onChange(of: register) { _ in validationError = nil; passwordConfirmation = "" }
+                    .onChange(of: register) { _ in
+                        validationError = nil
+                        store.errorMessage = nil
+                        passwordConfirmation = ""
+                        inviteCode = ""
+                    }
                 VStack(alignment: .leading, spacing: 7) {
                     Text("账户名").font(.caption).foregroundStyle(.secondary)
                     TextField("researcher", text: $store.username).textFieldStyle(.roundedBorder)
@@ -70,6 +77,11 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         Text("确认密码").font(.caption).foregroundStyle(.secondary)
                         SecureField("再次输入密码", text: $passwordConfirmation).textFieldStyle(.roundedBorder)
+                            .onSubmit { submit() }
+                    }
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("邀请码").font(.caption).foregroundStyle(.secondary)
+                        TextField("输入管理员提供的邀请码", text: $inviteCode).textFieldStyle(.roundedBorder)
                             .onSubmit { submit() }
                     }
                 }
@@ -88,11 +100,12 @@ struct LoginView: View {
                 Text("登录凭据保存在 macOS 钥匙串中；不保存密码。")
                     .font(.caption).foregroundStyle(.secondary)
                 Divider().padding(.vertical, 2)
-                Button { password = ""; passwordConfirmation = ""; store.useDemo() } label: {
+                Button { password = ""; passwordConfirmation = ""; inviteCode = ""; store.useDemo() } label: {
                     Label("先看看演示看板", systemImage: "play.rectangle")
                         .frame(maxWidth: .infinity)
                 }.buttonStyle(.bordered).controlSize(.large).disabled(store.isAuthenticating)
-            }.padding(40).frame(width: 400)
+            }.padding(.horizontal, 40).padding(.vertical, 28)
+            }.frame(width: 400)
         }
     }
     private func submit() {
@@ -101,9 +114,16 @@ struct LoginView: View {
         if register {
             guard (10...128).contains(password.count) else { validationError = "密码需要 10 至 128 个字符。"; return }
             guard password == passwordConfirmation else { validationError = "两次输入的密码不一致。"; return }
+            let normalizedInviteCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedInviteCode.isEmpty else { validationError = "请输入管理员提供的邀请码。"; return }
+            guard normalizedInviteCode.count <= 128 else { validationError = "邀请码最多 128 个字符。"; return }
         }
         Task {
-            if await store.login(password: password, register: register) { password = ""; passwordConfirmation = "" }
+            if await store.login(password: password, register: register, inviteCode: inviteCode) {
+                password = ""
+                passwordConfirmation = ""
+                inviteCode = ""
+            }
         }
     }
     private func previewRow(_ name: String, _ model: String, _ states: [GPUState]) -> some View {

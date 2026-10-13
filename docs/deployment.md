@@ -27,7 +27,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml exec api \
   python -m app.manage create-user researcher
 ```
 
-管理员命令会交互输入账户密码。`REGISTRATION_ENABLED=true` 时，App 的桌面登录页也可以注册；改为 `false` 可限制为管理员创建账户。
+管理员命令会交互输入账户密码。`REGISTRATION_ENABLED=true` 时，App 的桌面登录页允许凭有效邀请码注册；邀请码由管理员私下分发，成功创建新账户才消耗一个名额。创建方法见[邀请码管理](../server/README.md#invitation-only-registration)。改为 `false` 可完全关闭自助注册，仅允许管理员创建账户。
 
 ```bash
 curl --fail https://radar.example.com/api/v1/health

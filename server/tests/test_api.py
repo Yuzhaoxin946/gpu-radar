@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
-from app.models import Account, AccountSession, Server
-from app.security import token_hash, verify_password
+from app.models import Account, AccountSession, Invitation, Server
+from app.security import invitation_hash, token_hash, verify_password
 
 PASSWORD = "research-password-123"
+INVITE = "test-invitation-only"
 
 
 class Clock:
@@ -30,6 +31,9 @@ def setup(tmp_path):
     clock = Clock()
     app.state.clock = clock
     with TestClient(app) as client:
+        with app.state.session_factory() as db:
+            db.add(Invitation(code_hash=invitation_hash(INVITE), max_uses=20, used_count=0, created_at=clock()))
+            db.commit()
         yield client, clock, app
 
 
@@ -38,7 +42,7 @@ def bearer(token):
 
 
 def register(client, username="researcher"):
-    response = client.post("/api/v1/auth/register", json={"username": username, "password": PASSWORD})
+    response = client.post("/api/v1/auth/register", json={"username": username, "password": PASSWORD, "invite_code": INVITE})
     assert response.status_code == 201, response.text
     return response.json()["access_token"]
 
