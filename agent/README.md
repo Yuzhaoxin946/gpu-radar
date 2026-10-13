@@ -20,11 +20,29 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 不要给整条命令加 `sudo`。安装器使用用户级 systemd，检查 linger 以支持 SSH 退出和开机运行；确实需要管理员权限时会给出提示。重复执行会保留已有设备绑定。只检查硬件与网络时，把账户参数换为 `--check`。
 
-安装成功后运行 `systemctl --user status gpu-radar-agent.service` 查看状态，或 `journalctl --user -u gpu-radar-agent.service -n 30 --no-pager` 查看日志。新接入设备要积累完整 5 分钟数据后才显示颜色。
+安装器按 `/etc/machine-id` 为每台主机独立保存程序和设备配置：
+
+- 程序：`~/.local/share/gpu-radar/hosts/<machine-id>/gpu-radar-agent.pyz`
+- 配置：`~/.config/gpu-radar/hosts/<machine-id>/agent.json`（0600）
+- 服务：`gpu-radar-agent-<machine-id>.service`，只允许对应主机启动。
+
+因此多台 GPU 服务器共享 NFS Home 时，也不会合并为同一台设备。每台机器的 `/etc/machine-id` 必须有效且唯一。安装器遇到旧版平铺配置或服务会停止，保留原安装，不自动猜测其所属主机；已有旧版服务仍可正常使用。
+
+安装成功后查看本机状态或日志：
+
+```bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+unit="gpu-radar-agent-$(cat /etc/machine-id).service"
+systemctl --user status "$unit"
+journalctl --user -u "$unit" -n 30 --no-pager
+```
+
+新接入设备要积累完整 5 分钟数据后才显示颜色。
 
 如需在自动化中准确捕获下载失败，先在 Bash 中执行 `set -o pipefail`。首次绑定需要交互式 SSH 终端；安装器不接受命令行密码。
 
-以下为源码构建、手动安装及管理方式。
+以下为源码构建、手动安装及管理方式。下方手动示例使用旧版默认路径，只适用于不共享 Home 的单台主机；共享目录请使用上面的一键安装器。
 
 ## 旧服务器：Python 3.6+ 独立文件
 

@@ -22,7 +22,8 @@ curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/in
 - 检查真实 GPU 采集和 HTTPS 连接，再登录并绑定账户。
 - 配置每 5 秒上报的用户级 systemd 服务。
 - 检查 linger 和开机启动；必要时提示管理员授权，无法确认时明确报错。
-- 重复执行时保留已有绑定，不重复登记服务器；更新失败时恢复原有安装。
+- 每台主机独立保存配置与设备凭据，支持多台服务器共享 NFS 用户目录。
+- 重复执行时保留本机已有绑定，不重复登记服务器；更新失败时恢复原有安装。
 
 安装成功后，退出 SSH 仍会采集，服务器重启后自动启动。第一次接入需要连续积累 5 分钟数据，之后显示绿、黄、红状态。GPU 服务器无需新增入站端口。
 
@@ -43,9 +44,14 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 查看运行状态或最近日志：
 
 ```bash
-systemctl --user status gpu-radar-agent.service
-journalctl --user -u gpu-radar-agent.service -n 30 --no-pager
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+unit="gpu-radar-agent-$(cat /etc/machine-id).service"
+systemctl --user status "$unit"
+journalctl --user -u "$unit" -n 30 --no-pager
 ```
+
+旧版手动安装使用的 `gpu-radar-agent.service` 保持原样；安装器遇到旧版平铺配置会停止，避免在共享目录中错误复用其他主机身份。
 
 完整配置、手动安装与设备解绑说明见 [Linux Agent 文档](agent/README.md)。
 

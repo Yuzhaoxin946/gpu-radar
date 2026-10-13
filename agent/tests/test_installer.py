@@ -43,9 +43,9 @@ class InstallerTests(unittest.TestCase):
         # macOS /var is a symlink. The installer correctly disallows symlink homes.
         self.home = Path(directory).resolve() / "home"
         self.home.mkdir(mode=0o700)
-        self.package = self.home / ".local/share/gpu-radar/gpu-radar-agent.pyz"
-        self.config = self.home / ".config/gpu-radar/agent.json"
-        self.unit = self.home / ".config/systemd/user/gpu-radar-agent.service"
+        self.active_by_host = {}
+        self.enabled_services = set()
+        self.select_host("1" * 32)
         self.artifact = b"verified GPU Radar test artifact\n"
         self.installer.ARTIFACT_SHA256 = hashlib.sha256(self.artifact).hexdigest()
         self.download_body = self.artifact
@@ -66,6 +66,7 @@ class InstallerTests(unittest.TestCase):
         self.stack.enter_context(patch.dict(os.environ, {"HOME": str(self.home)}))
         # These OS facts are tested separately. Everything below uses real private files.
         self.stack.enter_context(patch.object(self.installer, "check_platform"))
+        self.stack.enter_context(patch.object(self.installer, "read_machine_id", side_effect=lambda: self.machine_id))
         self.stack.enter_context(patch.object(self.installer.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="linux-user", pw_dir=str(self.home))))
         self.stack.enter_context(patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name == "sudo" else "/usr/bin/" + name))
         self.stack.enter_context(patch.object(self.installer, "build_opener", side_effect=self.build_opener))
@@ -74,6 +75,32 @@ class InstallerTests(unittest.TestCase):
         self.stack.enter_context(patch.object(self.installer, "open_tty", side_effect=lambda: io.StringIO()))
         self.stack.enter_context(redirect_stdout(self.stdout))
         self.stack.enter_context(redirect_stderr(self.stderr))
+
+    def select_host(self, machine_id):
+        self.machine_id = machine_id
+        self.service = "gpu-radar-agent-" + machine_id + ".service"
+        self.package = self.home / ".local/share/gpu-radar/hosts" / machine_id / "gpu-radar-agent.pyz"
+        self.config = self.home / ".config/gpu-radar/hosts" / machine_id / "agent.json"
+        self.unit = self.home / ".config/systemd/user" / self.service
+
+    @property
+    def active(self):
+        return self.active_by_host.get(self.machine_id, False)
+
+    @active.setter
+    def active(self, value):
+        self.active_by_host[self.machine_id] = value
+
+    @property
+    def enabled(self):
+        return self.service in self.enabled_services
+
+    @enabled.setter
+    def enabled(self, value):
+        if value:
+            self.enabled_services.add(self.service)
+        else:
+            self.enabled_services.discard(self.service)
 
     def build_opener(self, handler):
         self.handlers.append(handler)
@@ -104,19 +131,23 @@ class InstallerTests(unittest.TestCase):
                 self.login_count += 1
                 config = Path(args[args.index("--config") + 1])
                 self.assertFalse(config.exists(), "Must not replace an existing device binding")
+                self.assertEqual(config, self.config, "Enrollment must target this host's own configuration")
                 self.assertEqual(args[args.index("--server") + 1], "https://123.56.135.166")
                 write_config(config, {
-                    "version": 1, "server": "https://123.56.135.166", "server_id": "new-id",
-                    "device_token": "TEST-DEVICE-SECRET", "name": args[args.index("--name") + 1],
+                    "version": 1, "server": "https://123.56.135.166", "server_id": "new-id-" + str(self.login_count),
+                    "device_token": "TEST-DEVICE-SECRET-" + str(self.login_count), "name": args[args.index("--name") + 1],
                     "allow_insecure_http": False,
                 })
             elif action == "run":
                 self.assertIn("--once", args)
+                self.assertEqual(Path(args[args.index("--config") + 1]), self.config)
                 code = self.report_code
             else:
                 self.fail("Unexpected Python action: " + str(args))
         elif args[0] == "systemctl":
             action = args[2]
+            if action not in {"show-environment", "daemon-reload"}:
+                self.assertEqual(args[-1], self.service, "Never operate another host's unit in a shared HOME")
             if action == "show-environment":
                 code = 0 if self.bus_available else 1
             elif action == "is-active":
@@ -164,7 +195,7 @@ class InstallerTests(unittest.TestCase):
             path.chmod(0o600)
         write_config(self.config, {
             "server": server, "server_id": "existing-id", "device_token": "TEST-DEVICE-SECRET",
-            "name": "lab-a", "account_username": account,
+            "name": "lab-a", "account_username": account, "machine_id": self.machine_id,
         })
         self.active = self.enabled = True
         return {path: path.read_bytes() for path in (self.package, self.unit, self.config)}
@@ -182,6 +213,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.login_count, 1)
         self.assertTrue(self.active and self.enabled and self.linger)
         self.assertEqual(load_config(self.config)["account_username"], "alice")
+        self.assertEqual(load_config(self.config)["machine_id"], self.machine_id)
         self.assertEqual(stat.S_IMODE(self.config.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.config.parent.stat().st_mode), 0o700)
         self.assertEqual(self.package.read_bytes(), self.artifact)
@@ -189,6 +221,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("--interval 5", unit)
         self.assertIn("RestartPreventExitStatus=3 4", unit)
         self.assertIn("WantedBy=default.target", unit)
+        self.assertIn("ConditionHost=" + self.machine_id, unit)
+        self.assertIn("/hosts/" + self.machine_id + "/agent.json", unit)
         self.assertEqual(self.installer.main(argv), 0)
         self.assertEqual(self.login_count, 1)
         self.assertEqual(self.config.read_bytes(), first)
@@ -276,7 +310,7 @@ class InstallerTests(unittest.TestCase):
             self.installer.main(["--username", "alice"])
         self.assert_preserved(before)
         self.assertNotIn("TEST-CHILD-SECRET", str(caught.exception))
-        self.assertIn(["systemctl", "--user", "start", "gpu-radar-agent.service"], self.commands)
+        self.assertIn(["systemctl", "--user", "start", self.service], self.commands)
 
     def test_first_report_failure_keeps_new_binding_for_retry(self):
         self.report_code = 1
@@ -321,6 +355,102 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual(self.login_count, 0)
 
+    def test_two_hosts_sharing_home_keep_distinct_bindings_and_guarded_units(self):
+        first_host = self.machine_id
+        first_args = ["--username", "alice", "--name", "lab-a"]
+        self.assertEqual(self.installer.main(first_args), 0)
+        first_binding = load_config(self.config)
+        first_files = {path: path.read_bytes() for path in (self.package, self.config, self.unit)}
+        first_service = self.service
+
+        second_host = "2" * 32
+        self.select_host(second_host)
+        second_args = ["--username", "alice", "--name", "lab-b"]
+        self.assertEqual(self.installer.main(second_args), 0)
+        second_binding = load_config(self.config)
+        self.assertEqual(self.login_count, 2)
+        self.assertNotEqual(first_binding["server_id"], second_binding["server_id"])
+        self.assertNotEqual(first_binding["device_token"], second_binding["device_token"])
+        self.assertEqual(second_binding["machine_id"], second_host)
+        self.assertIn("ConditionHost=" + second_host, self.unit.read_text())
+        self.assertIn("/hosts/" + second_host + "/gpu-radar-agent.pyz", self.unit.read_text())
+        self.assertEqual({path: path.read_bytes() for path in first_files}, first_files)
+        self.assertTrue(self.active_by_host[first_host])
+        self.assertTrue(self.active_by_host[second_host])
+        self.assertIn(first_service, self.enabled_services)
+        self.assertIn(self.service, self.enabled_services)
+
+        self.assertEqual(self.installer.main(second_args), 0)
+        self.select_host(first_host)
+        self.assertEqual(self.installer.main(first_args), 0)
+        self.assertEqual(self.login_count, 2, "Each physical host enrolls once, regardless of shared HOME")
+        self.assertEqual({path: path.read_bytes() for path in first_files}, first_files)
+
+    def test_second_host_failure_never_rolls_back_first_host_installation(self):
+        first_host = self.machine_id
+        self.assertEqual(self.installer.main(["--username", "alice", "--name", "lab-a"]), 0)
+        first_files = {path: path.read_bytes() for path in (self.package, self.config, self.unit)}
+        first_service = self.service
+        self.select_host("2" * 32)
+        self.restart_failure = True
+        with self.assertRaisesRegex(self.installer.InstallError, "Command failed"):
+            self.installer.main(["--username", "alice", "--name", "lab-b"])
+        self.assertFalse(self.active)
+        self.assertFalse(self.enabled)
+        self.assertTrue(self.config.exists())
+        self.assertFalse(self.package.exists())
+        self.assertFalse(self.unit.exists())
+        self.assertTrue(self.active_by_host[first_host])
+        self.assertIn(first_service, self.enabled_services)
+        self.assertEqual({path: path.read_bytes() for path in first_files}, first_files)
+
+    def test_legacy_flat_binding_or_unit_requires_explicit_migration(self):
+        for relative in (".config/gpu-radar/agent.json", ".config/systemd/user/gpu-radar-agent.service"):
+            with self.subTest(path=relative):
+                legacy = self.home / relative
+                legacy.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+                legacy.write_bytes(b"legacy installation must stay untouched")
+                before = {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()}
+                with self.assertRaisesRegex(self.installer.InstallError, "[Ll]egacy"):
+                    self.installer.main(["--username", "alice"])
+                self.assertEqual({path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()}, before)
+                self.assertFalse((self.home / ".local").exists())
+                self.assertEqual(self.requests, [])
+                self.assertEqual(self.commands, [])
+                legacy.unlink()
+
+    def test_preflight_only_can_check_a_legacy_installation_without_migrating(self):
+        legacy = self.home / ".config/gpu-radar/agent.json"
+        legacy.parent.mkdir(parents=True, mode=0o700)
+        legacy.write_bytes(b"legacy binding")
+        self.assertEqual(self.installer.main(["--check"]), 0)
+        self.assertEqual(legacy.read_bytes(), b"legacy binding")
+        self.assertFalse((self.home / ".local").exists())
+        self.assertEqual(self.login_count, 0)
+        self.assertTrue(all(args[0] != "systemctl" for args in self.commands))
+
+    def test_dangling_legacy_autostart_link_is_not_silently_migrated(self):
+        link = self.home / ".config/systemd/user/default.target.wants/gpu-radar-agent.service"
+        link.parent.mkdir(parents=True, mode=0o700)
+        link.symlink_to("../gpu-radar-agent.service")
+        with self.assertRaisesRegex(self.installer.InstallError, "[Ll]egacy"):
+            self.installer.main(["--username", "alice"])
+        self.assertTrue(link.is_symlink())
+        self.assertFalse((self.home / ".local").exists())
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.commands, [])
+
+    def test_binding_machine_id_mismatch_is_never_reused(self):
+        self.old_installation()
+        data = load_config(self.config)
+        data["machine_id"] = "2" * 32
+        write_config(self.config, data)
+        before = {path: path.read_bytes() for path in (self.package, self.config, self.unit)}
+        with self.assertRaisesRegex(self.installer.InstallError, "[Mm]achine|[Hh]ost"):
+            self.installer.main(["--username", "alice"])
+        self.assert_preserved(before)
+        self.assertTrue(all(args[0] != "systemctl" for args in self.commands))
+
 
 class InstallerTerminalTests(unittest.TestCase):
     def test_real_nonseekable_tty_supports_password_handoff(self):
@@ -343,6 +473,33 @@ class InstallerTerminalTests(unittest.TestCase):
         if sys.version_info < (3, 8):
             self.skipTest("feature_version grammar validation needs Python 3.8+")
         ast.parse(source, filename=str(SCRIPT), feature_version=(3, 6))
+
+
+class InstallerMachineIdentityTests(unittest.TestCase):
+    def test_machine_id_is_read_from_system_and_invalid_ids_never_fall_back(self):
+        installer, _ = load_installer()
+        expected = "0123456789abcdef0123456789abcdef"
+        with patch.dict(installer.__dict__, {"open": lambda *args, **kwargs: io.StringIO(expected + "\n")}):
+            self.assertEqual(installer.read_machine_id(), expected)
+        for value in ("", "0" * 32, "1" * 31, "1" * 33, "ABCDEF" * 5 + "AB", "uninitialized", "../../other-host"):
+            with self.subTest(value=value):
+                with patch.dict(installer.__dict__, {"open": lambda *args, **kwargs: io.StringIO(value)}):
+                    with self.assertRaises(installer.InstallError):
+                        installer.read_machine_id()
+                with self.assertRaises(installer.InstallError):
+                    installer.host_paths(Path("/home/researcher"), value)
+                with self.assertRaises(installer.InstallError):
+                    installer.unit_text(value)
+
+    def test_unreadable_machine_id_stops_install_before_any_home_changes(self):
+        installer, _ = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with patch.dict(os.environ, {"HOME": str(home)}), patch.object(installer, "check_platform"), \
+                    patch.dict(installer.__dict__, {"open": unittest.mock.Mock(side_effect=FileNotFoundError("no machine id"))}):
+                with self.assertRaisesRegex(installer.InstallError, "machine-id"):
+                    installer.main(["--username", "alice"])
+            self.assertEqual(list(home.iterdir()), [])
 
 
 class InstallerRedirectTests(unittest.TestCase):
