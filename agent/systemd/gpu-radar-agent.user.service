@@ -1,0 +1,19 @@
+[Unit]
+Description=GPU Radar GPU telemetry agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Install venv and log in as this Linux user before enabling.
+ExecStart=%h/.local/share/gpu-radar/venv/bin/gpu-radar-agent run --config %h/.config/gpu-radar/agent.json
+Restart=on-failure
+# 3 means revoked device token; 4 means incompatible/rejected report.
+RestartPreventExitStatus=3 4
+RestartSec=15
+TimeoutStopSec=25
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,32 @@
+[Unit]
+Description=GPU Radar account and telemetry API
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=gpu-radar
+Group=gpu-radar
+WorkingDirectory=/opt/gpu-radar/current/server
+EnvironmentFile=/etc/gpu-radar/gpu-radar.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/gpu-radar/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18760 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+StateDirectory=gpu-radar
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gpu-radar
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily GPU Radar SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=gpu-radar-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Renew GPU Radar IP HTTPS certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gpu-radar/certbot/bin/certbot renew --quiet --no-random-sleep-on-renew --config-dir /etc/gpu-radar/letsencrypt --work-dir /var/lib/gpu-radar-certbot --logs-dir /var/log/gpu-radar-certbot --deploy-hook /opt/gpu-radar/current/deploy/native/reload-nginx.sh
+TimeoutStartSec=10min
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+

@@ -1,0 +1,24 @@
+[Unit]
+Description=GPU Radar GPU telemetry agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace radar with the existing non-root Linux user who owns this config.
+# That user needs read access to NVIDIA device files and their config directory.
+User=radar
+Group=radar
+ExecStart=/opt/gpu-radar/venv/bin/gpu-radar-agent run --config /var/lib/gpu-radar/agent.json
+Restart=on-failure
+RestartPreventExitStatus=3 4
+RestartSec=15
+TimeoutStopSec=25
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/gpu-radar
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

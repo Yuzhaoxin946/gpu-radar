@@ -1,0 +1,16 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/radar.db
+      REGISTRATION_ENABLED: "true"
+    volumes:
+      - radar_local:/data
+    restart: unless-stopped
+volumes:
+  radar_local:
+

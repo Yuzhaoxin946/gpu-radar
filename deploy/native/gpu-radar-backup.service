@@ -1,0 +1,18 @@
+[Unit]
+Description=Create a consistent GPU Radar SQLite backup
+
+[Service]
+Type=oneshot
+User=gpu-radar
+Group=gpu-radar
+ExecStart=/opt/gpu-radar/venv/bin/python /opt/gpu-radar/current/deploy/native/backup.py
+TimeoutStartSec=5min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gpu-radar
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true

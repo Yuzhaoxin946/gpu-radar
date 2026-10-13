@@ -1,0 +1,26 @@
+.DS_Store
+.venv/
+.local/
+.env
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+**/.build/
+**/.swiftpm/
+**/build/
+**/.cache/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.log
+dist/
+
+# Personal deployment runbooks and release binaries stay outside Git.
+docs/*-live.md
+docs/*.local.md
+agent/*.pyz
+agent/systemd/*.service
+!agent/systemd/gpu-radar-agent.user.service
+!agent/systemd/gpu-radar-agent.system.service

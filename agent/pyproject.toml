@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-radar-agent"
+version = "0.1.0"
+description = "Account-bound Linux NVIDIA GPU telemetry agent for GPU Radar"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+nvml = ["nvidia-ml-py>=12.535.108"]
+
+[project.scripts]
+gpu-radar-agent = "gpu_radar_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
