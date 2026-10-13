@@ -26,7 +26,9 @@ curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/in
 
 Replace `your_account` with your **app username**. Enter your app password when prompted; input is hidden, and the password does not belong in the command line. The server name defaults to its hostname. Append `--name lab-a` to choose a display name for a new installation.
 
-Requirements: Linux, Bash, curl, Python 3.6+, working `nvidia-smi`, user-level systemd, and outbound HTTPS to GitHub and the backend. **Do not put `sudo` before the installation command.** If the installer separately prompts for sudo, it needs Linux administrative authentication, which is separate from your app password. The installer:
+Requirements: Linux, Bash, curl, Python 3.6+, working `nvidia-smi`, user-level systemd, and outbound HTTPS to GitHub and the backend. Both regular users and root can install. The installer resolves the home directory of the Linux account actually running it; it does not use `SUDO_USER` or an inherited `HOME`. Running directly as root or using `sudo bash` on the right side of the pipeline normally installs under `/root`; `sudo -u other bash` installs in `other`'s home. If using sudo, apply it to `bash` (`curl … | sudo bash -s -- …`); applying it only to `curl` does not change the installation user.
+
+Both cases use user-level systemd and linger. Root enables linger without another sudo command; regular users may be prompted for Linux administrative authentication, which is separate from the app password. The installer still cannot configure automatic background operation in containers or servers without a working systemd user manager. The installer:
 
 - Downloads and verifies a standalone Agent, with no pip, Docker, or additional Python packages.
 - Checks real GPU collection and HTTPS connectivity before signing in and enrolling the server.

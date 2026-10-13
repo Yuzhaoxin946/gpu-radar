@@ -11,7 +11,7 @@ Run one Agent on each GPU server to monitor multiple servers from the Mac app. S
 - An account registered in the latest macOS app using an invitation obtained privately from the service operator. Invitations are only used when creating new accounts; existing account login and Agent installation do not need one or consume a use. Your app account is separate from your Linux/SSH account. Other users' training contributes to GPU metrics without requiring those users to register app accounts.
 - Outbound HTTPS access to `https://123.56.135.166` and GitHub Release downloads. Use the Aliyun mirror below if GitHub is unreachable. **No new inbound port is needed on the GPU server.**
 
-Open an interactive terminal as your normal SSH user, then run the command on the GPU server. Do not prefix the installer with `sudo` or put your app password in a command. Remote command execution through a gateway such as JumpServer may lack `/dev/tty`; log in to the target server's terminal normally before pasting the command. For direct SSH, `ssh -t your-gpu-host` requests a terminal.
+Open an interactive terminal as the Linux user who will own the installation; both regular users and root are supported. Do not put your app password in a command. Remote command execution through a gateway such as JumpServer may lack `/dev/tty`; log in to the target server's terminal normally before pasting the command. For direct SSH, `ssh -t your-gpu-host` requests a terminal. The installer still cannot configure automatic background operation in containers or servers without a working systemd user manager.
 
 ## One-command installation
 
@@ -35,13 +35,15 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 Both download methods connect to `https://123.56.135.166` and use the same app accounts. They do not install a backend on the GPU server.
 
-The installer checks and attempts to enable **linger** for your Linux user. This keeps the service running after SSH logout and starts it at boot. If server policy requires administrator privileges, it asks whether to try `sudo`. Any sudo password prompt requires your **Linux user's password**, not your app password. If you lack permission, ask an administrator to run:
+The installation directory belongs to **the Linux account actually running the installer**. The installer resolves that account's home by effective UID, ignoring `SUDO_USER` and any inherited `HOME` from another account. A regular user installs in their own home; running as root directly or through `sudo bash` normally installs under `/root`. If using sudo, put it on the right side of the pipeline (`curl … | sudo bash -s -- …`); applying sudo only to `curl` does not change the installation user. `curl … | sudo -u other bash -s -- …` installs in `other`'s home. `--username` always names the app account and does not select the Linux installation user.
+
+Both regular users and root use a `systemctl --user` service. The installer checks and attempts to enable **linger** for that Linux user, keeping the service running after SSH logout and starting it at boot. Root enables linger directly, without another sudo command. For regular users, if server policy requires administrator privileges, the installer asks whether to try `sudo`. Any sudo password prompt requires your **Linux user's password**, not your app password. If you lack permission, ask an administrator to run:
 
 ```bash
 sudo loginctl enable-linger your_linux_username
 ```
 
-Replace `your_linux_username` with the actual SSH username, reconnect over SSH, and rerun the installer. Background installation and the first report are confirmed only when it reports `service active and enabled; Linger=yes` and `First report accepted`.
+Replace `your_linux_username` with the Linux account actually running the installer, log in again as that user, and rerun the installer. Background installation and the first report are confirmed only when it reports `service active and enabled; Linger=yes` and `First report accepted`.
 
 Open the Mac app and sign in to the same app account to see the server. A new device needs a full five minutes of continuous samples before its status colors appear.
 
@@ -59,7 +61,7 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 ## Inspect and manage the background service
 
-The following commands apply to the one-command installer. Run them on the target GPU server as the same Linux user. Set these variables in each new terminal:
+The following commands apply to the one-command installer. Run them in that same Linux user's login shell on the target GPU server, with `HOME` pointing to that account's home. For example, after installing as root through `sudo bash`, use `sudo -i` to enter root's login environment. Set these variables in each new terminal:
 
 ```bash
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -128,7 +130,7 @@ Always pass this machine's explicit `--config` path. A bare `logout` uses the le
 
 ## Storage paths and shared home directories
 
-The installer stores separate files for each host using `/etc/machine-id`:
+The installer stores separate files for each host using `/etc/machine-id`. Here, `~` means the home directory of the Linux account actually running the installer; root follows the same rule:
 
 | Item | Path |
 | --- | --- |
@@ -151,7 +153,7 @@ If the installer finds a legacy flat `~/.config/gpu-radar/agent.json` or `gpu-ra
 | `nvidia-smi is missing` / real collection fails | Run `nvidia-smi` as the same user; ask an administrator to fix the driver, PATH, or device read permissions |
 | `Reboot startup was NOT enabled` | Ask an administrator to enable linger for the actual Linux user, then rerun the installer |
 | `systemd user manager is unavailable` / `Failed to connect to bus` | Confirm linger is enabled, log out and reconnect, and set the two environment variables above. If it still fails, ask an administrator to check the systemd user manager. Setting variables alone does not create it |
-| `HOME differs from your Linux account home` | Use a normal SSH login without overriding HOME or running the installer through sudo |
+| Installation is in an unexpected directory | The installer uses the executing account's home; check whether sudo was applied to `bash`. `--username` names the app account and does not switch Linux users |
 | `Unsafe directory` | Inspect the ownership and permissions of the **specific directory** named in the error; see below |
 | Legacy binding, account, or name mismatch | Preserve the configuration. Use the existing binding's parameters or follow the removal procedure above; contact the maintainer before migrating a legacy installation |
 | Device credential rejected (401/403) | Check whether the device was deleted in the app. The service stops rather than restarting endlessly. Follow removal and reinstallation steps if it needs a new binding |

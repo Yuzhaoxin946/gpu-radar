@@ -11,7 +11,7 @@
 - 向服务维护者私下获取邀请码，在最新版 macOS App 中注册账户。邀请码只用于创建新账户；已有账户登录和安装 Agent 不需要，也不会消耗邀请码名额。App 账户与 Linux/SSH 账户是两回事；一台服务器上其他人的训练也会计入 GPU 指标，不要求他们注册 App。
 - 能通过 HTTPS 出站访问 `https://123.56.135.166`，以及 GitHub Release 下载地址；GitHub 不通时用下方阿里云镜像。**GPU 服务器不需要新增入站端口。**
 
-使用日常 SSH 用户打开交互式终端，再在服务器上执行命令。不要给安装命令加 `sudo`，也不要把 App 密码写进命令行。通过 JumpServer 等跳板机时，远程执行模式可能没有 `/dev/tty`；请先正常登录目标服务器的终端，再粘贴安装命令。直接 SSH 可用 `ssh -t your-gpu-host` 请求终端。
+使用准备安装客户端的 Linux 用户打开交互式终端，普通用户和 root 均可。不要把 App 密码写进命令行。通过 JumpServer 等跳板机时，远程执行模式可能没有 `/dev/tty`；请先正常登录目标服务器的终端，再粘贴安装命令。直接 SSH 可用 `ssh -t your-gpu-host` 请求终端。没有可用用户级 systemd 的容器或服务器仍不能通过此安装器配置自动常驻。
 
 ## 一键安装
 
@@ -35,13 +35,15 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 两种下载方式都固定连接 `https://123.56.135.166`，使用同一个 App 账户体系；不会在 GPU 服务器上部署服务端。
 
-安装器检查并尝试开启 Linux 用户的 `linger`，让服务在退出 SSH 后继续运行，并在机器启动时自动运行。如果服务器策略要求管理员权限，会提示是否通过 `sudo` 开启；此时 sudo 如询问密码，要求的是 **Linux 用户密码**，不是 App 密码。没有权限时，请让管理员执行：
+安装位置由**实际运行安装器的 Linux 用户**决定。安装器按有效 UID 查询该账户的主目录，不使用 `SUDO_USER`，也不会沿用其他账户的 `HOME`。普通用户直接运行时装到自己的主目录；root 直接运行或通过 `sudo bash` 运行时，通常装到 `/root`。如需 sudo，把它放在管道右侧（`curl … | sudo bash -s -- …`）；只给 `curl` 加 sudo 不会切换安装用户。`curl … | sudo -u other bash -s -- …` 会安装到 `other` 的主目录。`--username` 始终指 App 账户，不影响 Linux 安装用户。
+
+普通用户和 root 都使用 `systemctl --user` 服务。安装器检查并尝试开启该 Linux 用户的 `linger`，让服务在退出 SSH 后继续运行，并在机器启动时自动运行。root 直接开启 linger，无需再次调用 sudo；普通用户遇到需要管理员权限的服务器策略时，会提示是否通过 `sudo` 开启。此时 sudo 如询问密码，要求的是 **Linux 用户密码**，不是 App 密码。没有权限时，请让管理员执行：
 
 ```bash
 sudo loginctl enable-linger your_linux_username
 ```
 
-将 `your_linux_username` 替换为实际 SSH 用户名，然后重新登录 SSH 并重跑安装器。只有安装器报告 `service active and enabled; Linger=yes` 和 `First report accepted` 才表示后台安装及首次上报检查成功。
+将 `your_linux_username` 替换为实际运行安装器的 Linux 用户名，然后以该用户重新登录并重跑安装器。只有安装器报告 `service active and enabled; Linger=yes` 和 `First report accepted` 才表示后台安装及首次上报检查成功。
 
 打开 Mac App 并登录同一 App 账户，即可看到服务器。新接入设备需要积累完整 5 分钟的连续数据后才显示状态颜色。
 
@@ -59,7 +61,7 @@ curl -fsSL https://123.56.135.166/agent/install.sh | bash -s -- --mirror aliyun 
 
 ## 查看状态和管理后台服务
 
-以下命令适用于一键安装器。在目标 GPU 服务器、同一个 Linux 用户下运行；每次新开终端先设置这些变量：
+以下命令适用于一键安装器。在目标 GPU 服务器、同一个 Linux 用户的登录终端中运行，确保 `HOME` 是该账户的主目录；例如通过 `sudo bash` 安装到 root 时，可先执行 `sudo -i` 进入 root 的登录环境。每次新开终端先设置这些变量：
 
 ```bash
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -128,7 +130,7 @@ python3 "$agent_file" status --config "$agent_config"
 
 ## 存储路径与共享 Home
 
-安装器按 `/etc/machine-id` 为每台主机保存独立文件：
+安装器按 `/etc/machine-id` 为每台主机保存独立文件。下表的 `~` 指实际运行安装器的 Linux 账户主目录，root 也遵循同一规则：
 
 | 内容 | 路径 |
 | --- | --- |
@@ -151,7 +153,7 @@ python3 "$agent_file" status --config "$agent_config"
 | `nvidia-smi is missing` / 真实采集失败 | 先在同一用户下执行 `nvidia-smi`，请管理员修复驱动、PATH 或设备读取权限 |
 | `Reboot startup was NOT enabled` | 请管理员为实际 Linux 用户开启 linger，再重跑安装器 |
 | `systemd user manager is unavailable` / `Failed to connect to bus` | 确认 linger 已开启，退出后重新登录，设置上文两个环境变量；仍失败需管理员检查用户级 systemd。变量本身不会创建服务管理器 |
-| `HOME differs from your Linux account home` | 使用正常 SSH 登录，不要覆写 HOME，也不要以 sudo 运行安装器 |
+| 安装位置与预期不同 | 安装器使用实际执行账户的主目录；检查是否在 `bash` 一侧使用了 sudo。`--username` 是 App 账户名，不会切换 Linux 用户 |
 | `Unsafe directory` | 检查报错中**具体目录**的所有者和权限，见下文 |
 | 旧版绑定、名称或账户不匹配 | 保留原配置；使用原绑定参数，或按上面的正式卸载流程处理，旧版安装应先联系维护者迁移 |
 | 设备凭据被拒绝（401/403） | 在 App 确认设备是否已被删除；服务会停止而不会无限重启。需要重新绑定时按删除与重装流程处理 |

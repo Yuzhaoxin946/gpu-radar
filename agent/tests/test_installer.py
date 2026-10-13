@@ -53,6 +53,7 @@ class InstallerTests(unittest.TestCase):
         self.enabled = False
         self.linger = True
         self.allow_linger = True
+        self.allow_sudo_linger = False
         self.bus_available = True
         self.restart_failure = False
         self.report_code = 0
@@ -184,6 +185,12 @@ class InstallerTests(unittest.TestCase):
                     code = 1
             else:
                 self.fail("Unexpected loginctl command: " + str(args))
+        elif args[0] == "sudo":
+            self.assertEqual(args[:4], ["sudo", "-n", "loginctl", "enable-linger"])
+            if self.allow_sudo_linger:
+                self.linger = True
+            else:
+                code = 1
         else:
             self.fail("Unexpected external command: " + str(args))
         return SimpleNamespace(returncode=code, stdout=output, stderr="TEST-CHILD-SECRET")
@@ -337,13 +344,85 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.login_count, 1)
         self.assertTrue(self.config.exists(), "Keep new binding so retry never duplicates it")
 
-    def test_overridden_home_fails_before_files_or_services_change(self):
-        account = SimpleNamespace(pw_name="linux-user", pw_dir=str(self.home / "different"))
-        with patch.object(self.installer.pwd, "getpwuid", return_value=account):
-            with self.assertRaisesRegex(self.installer.InstallError, "HOME differs"):
-                self.installer.main(["--username", "alice"])
-        self.assertEqual(list(self.home.iterdir()), [])
-        self.assertEqual(self.commands, [])
+    def test_overridden_home_uses_effective_accounts_home(self):
+        inherited_home = self.home.parent / "inherited-home"
+        inherited_home.mkdir(mode=0o700)
+        marker = inherited_home / "keep"
+        marker.write_text("unrelated user data")
+        with patch.dict(os.environ, {"HOME": str(inherited_home), "SUDO_USER": "someone-else"}):
+            self.assertEqual(self.installer.main(["--username", "alice"]), 0)
+            self.assertEqual(os.environ["HOME"], str(self.home))
+        self.assertEqual(list(inherited_home.iterdir()), [marker])
+        self.assertEqual(marker.read_text(), "unrelated user data")
+        self.assertTrue(self.package.exists() and self.config.exists() and self.unit.exists())
+        self.assertTrue(self.active and self.enabled)
+
+    def test_root_install_uses_root_home_and_root_user_manager(self):
+        self.linger = False
+        inherited_home = self.home.parent / "sudo-callers-home"
+        inherited_home.mkdir(mode=0o700)
+        root_account = SimpleNamespace(pw_name="root", pw_dir=str(self.home), pw_uid=0)
+        original_lstat = Path.lstat
+
+        def root_owned_lstat(path, *args, **kwargs):
+            # Simulate files created by effective root while retaining actual file types,
+            # links and permission checks. The test runner itself remains unprivileged.
+            metadata = list(original_lstat(path, *args, **kwargs))
+            metadata[4] = 0
+            return os.stat_result(metadata)
+
+        inherited_environment = {
+            "HOME": str(inherited_home), "SUDO_USER": "researcher",
+            "XDG_RUNTIME_DIR": "/run/user/1001", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus",
+        }
+        with patch.dict(os.environ, inherited_environment), \
+                patch.object(self.installer.os, "geteuid", return_value=0), \
+                patch.object(self.installer.pwd, "getpwuid", return_value=root_account), \
+                patch.object(Path, "lstat", new=root_owned_lstat):
+            self.assertEqual(self.installer.main(["--username", "alice", "--name", "root-gpu"]), 0)
+            self.assertEqual(os.environ["HOME"], str(self.home))
+            self.assertEqual(os.environ["XDG_RUNTIME_DIR"], "/run/user/0")
+            self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/0/bus")
+
+        self.assertEqual(list(inherited_home.iterdir()), [])
+        self.assertEqual(self.login_count, 1)
+        self.assertTrue(self.active and self.enabled and self.linger)
+        self.assertEqual(self.package.read_bytes(), self.artifact)
+        self.assertIn(["loginctl", "show-user", "root", "--property=Linger", "--value"], self.commands)
+        self.assertIn(["loginctl", "--no-ask-password", "enable-linger", "root"], self.commands)
+        self.assertIn(["systemctl", "--user", "enable", self.service], self.commands)
+        self.assertTrue(all(args[0] != "sudo" for args in self.commands))
+
+    def test_root_linger_failure_never_retries_with_sudo(self):
+        self.linger = self.allow_linger = False
+        with patch.object(self.installer.os, "geteuid", return_value=0), \
+                patch.object(self.installer.shutil, "which", side_effect=lambda name: "/usr/bin/" + name):
+            with self.assertRaisesRegex(self.installer.InstallError, "Reboot startup was NOT enabled"):
+                self.installer.ensure_linger("root")
+        self.assertIn(["loginctl", "--no-ask-password", "enable-linger", "root"], self.commands)
+        self.assertTrue(all(args[0] != "sudo" for args in self.commands))
+        self.assertEqual(self.login_count, 0)
+        self.assertFalse(self.config.exists())
+
+    def test_ordinary_user_can_still_enable_linger_with_authorized_sudo(self):
+        self.linger = self.allow_linger = False
+        self.allow_sudo_linger = True
+        with patch.object(self.installer.os, "geteuid", return_value=1001), \
+                patch.object(self.installer.shutil, "which", side_effect=lambda name: "/usr/bin/" + name):
+            self.installer.ensure_linger("linux-user")
+        self.assertTrue(self.linger)
+        self.assertIn(["sudo", "-n", "loginctl", "enable-linger", "linux-user"], self.commands)
+
+    def test_missing_systemd_tools_does_not_enroll_or_install_service(self):
+        for missing in ("systemctl", "loginctl"):
+            with self.subTest(missing=missing), \
+                    patch.object(self.installer.shutil, "which", side_effect=lambda name: None if name == missing else "/usr/bin/" + name):
+                with self.assertRaisesRegex(self.installer.InstallError, missing + " is required"):
+                    self.installer.main(["--username", "alice"])
+                self.assertEqual(self.login_count, 0)
+                self.assertFalse(self.config.exists())
+                self.assertFalse(self.package.exists())
+                self.assertFalse(self.unit.exists())
 
     def test_second_installer_is_rejected_without_enrollment(self):
         lock = self.package.parent / ".install.lock"
@@ -450,6 +529,48 @@ class InstallerTests(unittest.TestCase):
             self.installer.main(["--username", "alice"])
         self.assert_preserved(before)
         self.assertTrue(all(args[0] != "systemctl" for args in self.commands))
+
+
+class InstallerAccountTests(unittest.TestCase):
+    def test_linux_platform_accepts_root_when_gpu_tools_exist(self):
+        installer, _ = load_installer()
+        with patch.object(installer.sys, "platform", "linux"), \
+                patch.object(installer.os, "getuid", return_value=0), \
+                patch.object(installer.os, "geteuid", return_value=0), \
+                patch.object(installer.shutil, "which", return_value="/usr/bin/nvidia-smi"):
+            installer.check_platform()
+
+    def test_account_and_home_come_from_effective_uid_even_with_sudo_environment(self):
+        installer, _ = load_installer()
+        cases = (
+            (0, 0, "root", "/root"),
+            (1001, 0, "root", "/root"),
+            (0, 1002, "researcher", "/home/researcher"),
+            (1002, 1002, "researcher", "/home/researcher"),
+        )
+        for real_uid, effective_uid, username, home in cases:
+            with self.subTest(real_uid=real_uid, effective_uid=effective_uid):
+                account = SimpleNamespace(pw_name=username, pw_dir=home, pw_uid=effective_uid)
+                with patch.dict(os.environ, {"HOME": "/home/sudo-caller", "SUDO_USER": "sudo-caller"}), \
+                        patch.object(installer.os, "getuid", return_value=real_uid), \
+                        patch.object(installer.os, "geteuid", return_value=effective_uid), \
+                        patch.object(installer.pwd, "getpwuid", return_value=account) as lookup:
+                    self.assertIs(installer.current_account(), account)
+                    lookup.assert_called_once_with(effective_uid)
+                    self.assertEqual(os.environ["HOME"], home)
+
+    def test_missing_account_or_unsafe_home_is_rejected_without_changing_home(self):
+        installer, _ = load_installer()
+        with patch.dict(os.environ, {"HOME": "/home/unchanged"}):
+            with patch.object(installer.pwd, "getpwuid", side_effect=KeyError("unknown uid")):
+                with self.assertRaisesRegex(installer.InstallError, "passwd entry"):
+                    installer.current_account()
+            for home in ("", "relative/home", "/"):
+                with self.subTest(home=home), \
+                        patch.object(installer.pwd, "getpwuid", return_value=SimpleNamespace(pw_dir=home)):
+                    with self.assertRaisesRegex(installer.InstallError, "home directory"):
+                        installer.current_account()
+            self.assertEqual(os.environ["HOME"], "/home/unchanged")
 
 
 class InstallerTerminalTests(unittest.TestCase):

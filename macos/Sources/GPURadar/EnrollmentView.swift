@@ -90,7 +90,7 @@ struct EnrollmentView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("一键安装并登录").font(.headline)
-                        Text("需要 Python 3.6+ 和正常工作的 NVIDIA 驱动。使用日常 SSH 账户执行，不要在命令前加 sudo。")
+                        Text("需要 Python 3.6+、正常工作的 NVIDIA 驱动和用户级 systemd。普通用户或 root 均可，安装到实际运行账户的主目录。")
                             .font(.callout).foregroundStyle(.secondary)
                         Picker("下载来源", selection: $source) {
                             ForEach(AgentDownloadSource.allCases) { item in

@@ -29,10 +29,10 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SERVER = "https://123.56.135.166"
-ARTIFACT_URL = "https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v0.2.2/gpu-radar-agent.pyz"
+ARTIFACT_URL = "https://github.com/Yuzhaoxin946/gpu-radar/releases/download/v0.2.3/gpu-radar-agent.pyz"
 ALIYUN_ARTIFACT_URL = SERVER + "/agent/releases/0.1.0/gpu-radar-agent.pyz"
 ARTIFACT_REDIRECT_HOSTS = frozenset({"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"})
-INSTALLER_USER_AGENT = "gpu-radar-installer/0.2.2"
+INSTALLER_USER_AGENT = "gpu-radar-installer/0.2.3"
 ARTIFACT_SHA256 = "5a83181728bcc9e932f0b1ec8639246795643759b48b7400b908b5945374f5bf"
 LEGACY_SERVICE = "gpu-radar-agent.service"
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
@@ -158,10 +158,21 @@ def refuse_legacy_installation(home):
 def check_platform():
     if sys.platform != "linux":
         raise InstallError("Run this installer on a Linux GPU server.")
-    if os.getuid() == 0:
-        raise InstallError("Run as your normal SSH user, without sudo. Only enabling reboot startup may request sudo.")
     if not shutil.which("nvidia-smi"):
         raise InstallError("nvidia-smi is missing from PATH. Install/fix the NVIDIA driver first.")
+
+
+def current_account():
+    # sudo may preserve HOME/SUDO_USER from the caller. Installation belongs to
+    # the effective Linux user, never to a different user's inherited home.
+    try:
+        account = pwd.getpwuid(os.geteuid())
+    except KeyError:
+        raise InstallError("The current Linux user has no passwd entry; configure an account home before installing.")
+    if not Path(account.pw_dir).is_absolute() or Path(account.pw_dir) == Path("/"):
+        raise InstallError("The current Linux user needs an absolute, dedicated home directory.")
+    os.environ["HOME"] = account.pw_dir
+    return account
 
 
 def preflight(artifact):
@@ -199,14 +210,14 @@ def safe_directory(home, path):
         if not target.exists() and not target.is_symlink():
             target.mkdir(mode=0o700, exist_ok=True)
         metadata = target.lstat()
-        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
             raise InstallError("Unsafe directory (requires your ownership, no symlink/group/world write): {}".format(target))
 
 
 def safe_file(path):
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1:
             raise InstallError("Refusing unsafe file (symlink, hardlink or wrong owner): {}".format(path))
 
 
@@ -268,7 +279,7 @@ def ensure_linger(username):
     if linger_enabled(username):
         return
     command(["loginctl", "--no-ask-password", "enable-linger", username], check=False)
-    if not linger_enabled(username) and shutil.which("sudo"):
+    if not linger_enabled(username) and os.geteuid() != 0 and shutil.which("sudo"):
         # Try authorized passwordless sudo first; otherwise ask explicitly in the TTY.
         result = command(["sudo", "-n", "loginctl", "enable-linger", username], check=False)
         if result.returncode:
@@ -278,19 +289,21 @@ def ensure_linger(username):
                 if terminal.readline().strip().lower() in {"y", "yes"}:
                     subprocess.run(["sudo", "loginctl", "enable-linger", username], stdin=terminal)
     if not linger_enabled(username):
+        if os.geteuid() == 0:
+            raise InstallError("Reboot startup was NOT enabled for root. Check that systemd-logind and the root user manager are available; no account was enrolled.")
         raise InstallError("Reboot startup was NOT enabled. Ask an administrator to run: sudo loginctl enable-linger {} . Then rerun the installer; no account was enrolled.".format(shlex.quote(username)))
 
 
 def systemd_preflight(username):
     for executable in ("systemctl", "loginctl"):
         if not shutil.which(executable):
-            raise InstallError("{} is required for persistent user service installation.".format(executable))
+            raise InstallError("{} is required for persistent user service installation (including root). Containers without systemd need an existing process manager instead.".format(executable))
     ensure_linger(username)
-    runtime = Path("/run/user") / str(os.getuid())
+    runtime = Path("/run/user") / str(os.geteuid())
+    # Do not reuse the invoking user's bus when sudo preserves its environment.
+    os.environ["XDG_RUNTIME_DIR"] = str(runtime)
+    os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(runtime / "bus")
     for attempt in range(6):
-        if runtime.is_dir() and runtime.stat().st_uid == os.getuid():
-            os.environ["XDG_RUNTIME_DIR"] = str(runtime)
-            os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(runtime / "bus")
         if command(["systemctl", "--user", "show-environment"], check=False).returncode == 0:
             return
         if attempt < 5:
@@ -410,7 +423,7 @@ def validate_username(value):
 
 
 def parser():
-    result = argparse.ArgumentParser(description="Install GPU Radar for your Linux SSH user; no sudo around this script.")
+    result = argparse.ArgumentParser(description="Install GPU Radar in the current effective Linux user's home, including root or a sudo-selected user.")
     result.add_argument("--username", help="GPU Radar App account (prompted for a new binding if omitted)")
     result.add_argument("--name", help="Display name, default short hostname for a new binding")
     result.add_argument("--mirror", choices=["aliyun"], help="Download the same verified agent from Aliyun instead of GitHub Releases")
@@ -437,9 +450,9 @@ def main(argv=None):
             preflight(artifact)
         print("Check complete. No account enrolled; no installed files or services changed.")
         return 0
-    home = Path.home()
-    if home != Path(pwd.getpwuid(os.getuid()).pw_dir):
-        raise InstallError("HOME differs from your Linux account home. Run from a normal SSH login without overriding HOME or sudo.")
+    account = current_account()
+    home = Path(account.pw_dir)
+    print("Installing for Linux user '{}' in {}.".format(account.pw_name, home))
     refuse_legacy_installation(home)
     paths = host_paths(home, machine_id)
     package, config_dir, unit_dir = paths["package"], paths["config_dir"], paths["unit_dir"]
@@ -471,7 +484,7 @@ def main(argv=None):
                 os.close(probe_fd)
                 os.unlink(probe_path)
             unit_text(machine_id)
-            username = pwd.getpwuid(os.getuid()).pw_name
+            username = account.pw_name
             systemd_preflight(username)
             if binding is None:
                 enroll(artifact, config, args.username, name, machine_id)

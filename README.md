@@ -26,7 +26,9 @@ curl -fsSL https://github.com/Yuzhaoxin946/gpu-radar/releases/latest/download/in
 
 把 `your_account` 替换为 **App 账户名**。按提示输入 App 密码；密码不会回显，也不需要写进命令行。服务器名称默认取主机名，可追加 `--name lab-a`。
 
-安装需要 Linux、Bash、curl、Python 3.6+、可正常运行的 `nvidia-smi`、用户级 systemd，以及到 GitHub 和服务端的 HTTPS 出站连接。**不要在整条安装命令前加 `sudo`。** 如果安装器另行提示 sudo，它需要的是 Linux 管理权限，与 App 密码不同。安装器会：
+安装需要 Linux、Bash、curl、Python 3.6+、可正常运行的 `nvidia-smi`、用户级 systemd，以及到 GitHub 和服务端的 HTTPS 出站连接。普通用户和 root 都可以安装：安装器使用运行它的 Linux 账户主目录，按实际用户身份确定路径，不使用 `SUDO_USER` 或沿用的 `HOME`。root 直接执行或在管道右侧使用 `sudo bash` 时通常安装到 `/root`；`sudo -u other bash` 则安装到 `other` 的主目录。若需要 sudo，应放在 `bash` 一侧（`curl … | sudo bash -s -- …`），只给 `curl` 加 sudo 不会切换安装用户。
+
+两种用户均使用用户级 systemd 和 linger。root 开启 linger 无需再次调用 sudo；普通用户可能收到 Linux 管理权限提示，与 App 密码不同。没有可用用户级 systemd 的容器或服务器仍不能通过此安装器配置自动常驻。安装器会：
 
 - 下载并校验独立 Agent，无需 pip、Docker 或额外 Python 包。
 - 检查真实 GPU 采集和 HTTPS 连接，再登录并绑定账户。
