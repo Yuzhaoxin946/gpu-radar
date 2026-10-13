@@ -21,7 +21,8 @@ cd macos && swift test
 
 ## 实机验证
 
-- Ubuntu 18.04、Python 3.6.9、8 张 NVIDIA A100-SXM4-80GB：独立 Agent 采集、中心时间校准和真实 HTTPS 上报。
+- Ubuntu 18.04、Python 3.6.9、8 张 NVIDIA A100-SXM4-80GB：独立 Agent 采集、中心时间校准、真实 HTTPS 上报，以及新版安装器的只读预检。
+- Ubuntu 22.04、Python 3.10.12、8 张 NVIDIA GeForce RTX 4090、NFS 共享 Home：通过阿里云镜像完成公开安装器的真实终端登录、主机隔离安装、首条上报和后台服务配置；关闭 SSH 后连续观察 35 秒，每 5 秒有新样本。该环境直连 GitHub 超时，GitHub 匿名下载与文件摘要已在开发机验证。
 - 用户级 systemd 与 linger：服务处于 active/enabled，结束部署 SSH 后仍持续上报；重启采集服务后恢复上报。
 - 原生服务端：systemd、SQLite WAL、Nginx、HTTPS 证书验证、续签演练与一致性备份。
 - macOS：Apple Silicon Release 构建、临时签名、登录与注册表单、演示模式、桌面 GPU 详情。菜单栏布局和不可点击方块经过代码审查。
@@ -30,7 +31,7 @@ cd macos && swift test
 
 - 整台共享 GPU 服务器实际重启后的恢复。
 - Docker / PostgreSQL / Caddy 的实际组合部署。
-- 各种 Linux 发行版、权限配置和网络环境的一键安装。
+- 除上述实机外，其他 Linux 发行版、权限配置和网络环境的一键安装。
 - 菜单栏弹窗自动点击、窄屏和多显示器完整验收。
 - 原生 UI 中实际提交修改密码；对应行为已通过 API 集成验证。
 - Developer ID 签名、Apple 公证和 Intel Mac 二进制。
